@@ -576,41 +576,41 @@ A later FlatRedBall2 integration validates that consumer's project conventions a
 
 ## 14. Ordered, agent-sized implementation plan
 
-Execute in the order below. Later tasks build on completed earlier tasks; do not skip to MCP scaffolding before proving native Gum output. Every task follows Section 13.1. Where a row exceeds one focused change with one testable outcome, split it and preserve order rather than broadening an agent's responsibility.
+The [Figma Plugin Linear project](https://linear.app/nerdino/project/figma-plugin-0331c44c25c1) tracks these implementation tickets. Execute in the table order below, **not** Linear issue-number order. Later tickets build on completed earlier work; do not start MCP scaffolding before proving native Gum output. Every ticket follows Section 13.1. If one exceeds a focused change with one testable outcome, split it while preserving dependencies. Each linked ticket owns its work status and handoff; this table retains the approved acceptance contract.
 
-| ID | Deliverable | Red test / green exit condition |
-|---|---|---|
-| T01 | Repository skeleton, pinned SDK/package scaffolding, dependency rules. | Architecture test rejects a forbidden core dependency, then passes with correct project references. |
-| T02 | Compatibility record and minimal native Gum sample. | Missing-tool/font/load check fails; pinned toolchain loads and renders a simple sample. Record macOS/Windows requirements. |
-| T03 | Development-plugin shell and offline/empty views. | Empty document previously fails/blocks; panel now opens with no workspace or bridge. |
-| T04 | Versioned request/snapshot/catalog/diagnostic schema skeleton and TS/C# vectors. | Both sides reject the same invalid examples and accept the same minimal valid input. Extend schemas with each use case. |
-| T05 | Bridge host pairing and one authenticated request from real Figma. | Missing/invalid credential is denied; real desktop plugin round trip passes on supported OSes. |
-| T06 | Bundled sample workspace initialization and local registration. | Conflicting directory is rejected; a new directory gets a working isolated sample, not a required game association. |
-| T07 | Thin frame/text/image extraction and canonical hashing. | Selection/name/capture tests fail, then produce bounded typed snapshots with stable hashes. |
-| T08 | Staged blob publication and snapshot store. | Missing/corrupt blob cannot publish; complete retried upload finalizes exactly once. |
-| T09 | Minimal pure conversion and native serialization. | Golden frame/text/image fixture fails, then loads through Gum with expected output. |
-| T10 | Preview operation and artifact delivery to plugin. | Missing/outdated artifact cases fail correctly; a real selected frame becomes a staged Gum preview end to end. |
-| T11 | Fixed/fill sizing, anchors, and min/max. | Focused geometry fixtures pass at both viewport sizes. |
-| T12 | Stack spacing, cross-axis alignment, padding, and hug sizing. | Nested/asymmetric cases pass; dependency cycles are rejected. Split by rule as necessary. |
-| T13 | Clipping, supported image crop/scale, transforms, and negative cases. | Supported geometry matches; unsupported interactive transforms diagnose instead of flattening. |
-| T14 | Font/asset mapping, deterministic font inputs, and fallback review UI. | Missing fonts/assets block; approved decorative fallback is scoped and traceable. |
-| T15 | Component catalog, document mappings, and stable aliases. | Built-in offline catalog works; custom catalog mismatch and alias collisions are explicit. |
-| T16 | Shared components, dependencies, instances, and overrides. | Two screens share one definition without duplicate output or unauthorized component rewrites. |
-| T17 | Button adapter and state/property/connection contracts. | Required states and real click/focus/disabled behavior pass in the sample. |
-| T18 | TextBox and scroll adapters. | Text entry and actual scrolling pass; clipping-only substitutes fail tests. |
-| T19 | Explicit sample-design creator and complete reference fixture set. | Creates an isolated page and realistic responsive references; repeat invocation cannot damage user layers. |
-| T20 | Immutable sync plan, ownership baseline, and contract diff. | Managed/unmanaged conflicts and API breaks surface before any destination write. |
-| T21 | Managed writer, lock, stale-plan checks, and recovery journal. | Fault-injection/retry tests fail, then recover without leaving partial ownership or touching handwritten files. |
-| T22 | Rename/delete/shared-reference lifecycle and rollback. | Partial-root export cannot prune unrelated files; rollback respects intervening changes. |
-| T23 | Sample behavior integration and preservation regression. | A05 fails before safe ownership/integration, then handler bytes remain unchanged and event count is one. |
-| T24 | Full CLI surface over host operations. | Invalid/missing IDs, exit codes, wait/result semantics and artifact access pass without an AI service. |
-| T25 | Thin MCP stdio surface using the same host client. | Discovery, framing, tool schemas, image results and CLI/MCP parity pass; no second conversion/writer implementation. |
-| T26 | Complete review UI, statuses, approvals, cancellation, and freshness. | Stale previews and dangerous update plans cannot masquerade as verified/approved. |
-| T27 | Security limits, malformed-input tests, cross-platform runtime suite. | Boundary and over-limit cases pass; actual client/toolchain tests close both OS compatibility gates. |
-| T28 | Real external-agent sample acceptance. | A20 and repeat-export behavior pass with the chosen available client; record exact support tested. |
-| T29 | Packaging, setup, troubleshooting, and agent handoff guide. | A clean environment installs development plugin + bridge, creates sample, publishes, renders and regenerates using documented steps. |
+| Implementation ticket | Red test / green exit condition |
+|---|---|
+| [Repository skeleton, pinned SDK/package scaffolding, dependency rules](https://linear.app/nerdino/issue/GAM-207) | Architecture test rejects a forbidden core dependency, then passes with correct project references. |
+| [Compatibility record and minimal native Gum sample](https://linear.app/nerdino/issue/GAM-209) | Missing-tool/font/load check fails; pinned toolchain loads and renders a simple sample. Record macOS/Windows requirements. |
+| [Development-plugin shell and offline/empty views](https://linear.app/nerdino/issue/GAM-208) | Empty document previously fails/blocks; panel now opens with no workspace or bridge. |
+| [Versioned request, snapshot, catalog and diagnostic schemas](https://linear.app/nerdino/issue/GAM-206) | Both sides reject the same invalid examples and accept the same minimal valid input. Extend schemas with each use case. |
+| [Bridge host pairing and authenticated request from real Figma](https://linear.app/nerdino/issue/GAM-210) | Missing/invalid credential is denied; real desktop plugin round trip passes on supported OSes. |
+| [Bundled sample workspace initialization and local registration](https://linear.app/nerdino/issue/GAM-214) | Conflicting directory is rejected; a new directory gets a working isolated sample, not a required game association. |
+| [Thin frame/text/image extraction and canonical hashing](https://linear.app/nerdino/issue/GAM-215) | Selection/name/capture tests fail, then produce bounded typed snapshots with stable hashes. |
+| [Staged blob publication and snapshot store](https://linear.app/nerdino/issue/GAM-212) | Missing/corrupt blob cannot publish; complete retried upload finalizes exactly once. |
+| [Minimal pure conversion and native Gum serialization](https://linear.app/nerdino/issue/GAM-213) | Golden frame/text/image fixture fails, then loads through Gum with expected output. |
+| [Preview operation and artifact delivery to plugin](https://linear.app/nerdino/issue/GAM-211) | Missing/outdated artifact cases fail correctly; a real selected frame becomes a staged Gum preview end to end. |
+| [Fixed/fill sizing, anchors, and min/max](https://linear.app/nerdino/issue/GAM-217) | Focused geometry fixtures pass at both viewport sizes. |
+| [Stack spacing, cross-axis alignment, padding, and hug sizing](https://linear.app/nerdino/issue/GAM-219) | Nested/asymmetric cases pass; dependency cycles are rejected. Split by rule as necessary. |
+| [Clipping, image crop/scale, transforms and negative cases](https://linear.app/nerdino/issue/GAM-220) | Supported geometry matches; unsupported interactive transforms diagnose instead of flattening. |
+| [Font/asset mapping, deterministic inputs and fallback review UI](https://linear.app/nerdino/issue/GAM-216) | Missing fonts/assets block; approved decorative fallback is scoped and traceable. |
+| [Component catalog, document mappings and stable aliases](https://linear.app/nerdino/issue/GAM-218) | Built-in offline catalog works; custom catalog mismatch and alias collisions are explicit. |
+| [Shared components, dependencies, instances and overrides](https://linear.app/nerdino/issue/GAM-223) | Two screens share one definition without duplicate output or unauthorized component rewrites. |
+| [Button adapter and state/property/connection contracts](https://linear.app/nerdino/issue/GAM-221) | Required states and real click/focus/disabled behavior pass in the sample. |
+| [TextBox and scroll adapters](https://linear.app/nerdino/issue/GAM-222) | Text entry and actual scrolling pass; clipping-only substitutes fail tests. |
+| [Explicit sample-design creator and complete reference fixtures](https://linear.app/nerdino/issue/GAM-225) | Creates an isolated page and realistic responsive references; repeat invocation cannot damage user layers. |
+| [Immutable sync plan, ownership baseline and contract diff](https://linear.app/nerdino/issue/GAM-224) | Managed/unmanaged conflicts and API breaks surface before any destination write. |
+| [Managed writer, lock, stale-plan checks and recovery journal](https://linear.app/nerdino/issue/GAM-226) | Fault-injection/retry tests fail, then recover without leaving partial ownership or touching handwritten files. |
+| [Rename/delete/shared-reference lifecycle and rollback](https://linear.app/nerdino/issue/GAM-230) | Partial-root export cannot prune unrelated files; rollback respects intervening changes. |
+| [Sample behavior integration and preservation regression](https://linear.app/nerdino/issue/GAM-227) | A05 fails before safe ownership/integration, then handler bytes remain unchanged and event count is one. |
+| [Full CLI surface over host operations](https://linear.app/nerdino/issue/GAM-229) | Invalid/missing IDs, exit codes, wait/result semantics and artifact access pass without an AI service. |
+| [Thin MCP stdio surface using same host client](https://linear.app/nerdino/issue/GAM-228) | Discovery, framing, tool schemas, image results and CLI/MCP parity pass; no second conversion/writer implementation. |
+| [Complete review UI, statuses, approvals, cancellation and freshness](https://linear.app/nerdino/issue/GAM-233) | Stale previews and dangerous update plans cannot masquerade as verified/approved. |
+| [Security limits, malformed-input tests and cross-platform runtime suite](https://linear.app/nerdino/issue/GAM-232) | Boundary and over-limit cases pass; actual client/toolchain tests close both OS compatibility gates. |
+| [Real external-agent sample acceptance](https://linear.app/nerdino/issue/GAM-231) | A20 and repeat-export behavior pass with the chosen available client; record exact support tested. |
+| [Packaging, setup, troubleshooting and agent handoff guide](https://linear.app/nerdino/issue/GAM-234) | A clean environment installs development plugin + bridge, creates sample, publishes, renders and regenerates using documented steps. |
 
-Milestones: **T10** proves the thin end-to-end slice; **T19** completes sample design/control coverage; **T23** proves safe regeneration; **T29** completes the standalone v1. Early tests may use minimal local scaffolds; do not wait for the full sample-design creator to prove the first slice.
+Milestones: [Preview operation and artifact delivery to plugin](https://linear.app/nerdino/issue/GAM-211) proves the thin end-to-end slice; [Explicit sample-design creator and complete reference fixtures](https://linear.app/nerdino/issue/GAM-225) completes sample design/control coverage; [Sample behavior integration and preservation regression](https://linear.app/nerdino/issue/GAM-227) proves safe regeneration; [Packaging, setup, troubleshooting and agent handoff guide](https://linear.app/nerdino/issue/GAM-234) completes the standalone v1. Early tests may use minimal local scaffolds; do not wait for the full sample-design creator to prove the first slice.
 
 Do not commit credentials, generated build artifacts, enormous preview caches, or private Figma data. Do not implement a generic shell tool, cloud deployment, production-game dependencies, or a custom C# UI generator as shortcuts.
 
@@ -630,13 +630,13 @@ A new control, layout mode, target backend, or transport must extend its owning 
 
 Deliver the development-loadable Figma plugin; local bridge with host, CLI, and MCP modes; versioned schemas and built-in catalog; deterministic converter and Gum adapter; guarded regeneration; bundled sample-design creator and Gum application; positive/negative fixtures; red-then-green development coverage; macOS/Windows compatibility record; and reproducible setup/agent instructions.
 
-There are no outstanding product-owner identifiers needed to start. Implementation resolves toolchain pins and low-level library choices through T01-T05. Production integrations are a subsequent use of the product, not missing inputs to this specification.
+There are no outstanding product-owner identifiers needed to start. Implementation resolves toolchain pins and low-level library choices through the first five linked tickets in Section 14. Production integrations are a subsequent use of the product, not missing inputs to this specification.
 
 The release documentation must distinguish implemented-and-tested functionality, known unsupported features, and any environment-specific unrun checks. Do not claim compatibility from reading documentation alone.
 
 ### 16.2 Copyable implementation prompt
 
-> Implement Figma-to-Gum Bridge specification v0.2 in Section 14 order. Begin with T01-T05 and prove the T10 selection-to-native-Gum-preview slice before widening scope. Build a standalone Figma plugin in TypeScript and a modular C#/.NET 10 local bridge. Supply the sample Figma-design creator and Gum test application yourself; do not require a production game repository or an existing design. Follow red -> green -> refactor for every change. Keep conversion pure and deterministic, reuse pinned Gum tooling, and keep MCP/CLI thin over one host and one managed writer. Figma owns visual design; protect handwritten behavior and unrelated Gum files. Do not hand-patch generated visuals to pass screenshots. Every supported feature needs fixtures and every unsupported feature needs a diagnostic. Prove unchanged exports are no-ops and styling updates preserve a handwritten click handler that fires once. Run the standalone acceptance cases, document exact compatibility tested, and report unrun tests honestly. Do not add cloud infrastructure, reverse sync, an embedded model, or application logic to the converter.
+> Implement Figma-to-Gum Bridge specification v0.2 in Section 14 order. Begin with the first five linked tickets in Section 14 and prove [Preview operation and artifact delivery to plugin](https://linear.app/nerdino/issue/GAM-211) before widening scope. Build a standalone Figma plugin in TypeScript and a modular C#/.NET 10 local bridge. Supply the sample Figma-design creator and Gum test application yourself; do not require a production game repository or an existing design. Follow red -> green -> refactor for every change. Keep conversion pure and deterministic, reuse pinned Gum tooling, and keep MCP/CLI thin over one host and one managed writer. Figma owns visual design; protect handwritten behavior and unrelated Gum files. Do not hand-patch generated visuals to pass screenshots. Every supported feature needs fixtures and every unsupported feature needs a diagnostic. Prove unchanged exports are no-ops and styling updates preserve a handwritten click handler that fires once. Run the standalone acceptance cases, document exact compatibility tested, and report unrun tests honestly. Do not add cloud infrastructure, reverse sync, an embedded model, or application logic to the converter.
 
 ### 16.3 Change record
 
