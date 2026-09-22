@@ -1,0 +1,22 @@
+# .NET build and machine output
+**/bin/
+**/obj/
+.vs/
+.idea/
+*.user
+*.suo
+# Node and local tooling
+**/node_modules/
+**/dist/
+**/.cache/
+**/coverage/
+**/__pycache__/
+*.pyc
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+*.key
+.DS_Store

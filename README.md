@@ -2,7 +2,7 @@
 
 A visual Figma plugin and local C#/.NET 10 bridge for turning Figma designs into native Gum UI. External coding agents use MCP or a CLI to request deterministic conversion and connect the generated UI to application behavior.
 
-**Status: specification only.** The approved implementation contract is checked in; the plugin, bridge, and sample application have not been implemented or tested yet. Commands and directory layouts described in the specification are requirements to implement, not currently available features.
+**Status: T01 skeleton only.** The approved contract and initial project/package scaffolding are checked in. The plugin has no runnable UI, the bridge has no executable host or conversion behavior, and the sample application has not been built. Gum toolchain and Figma runtime compatibility have not been verified.
 
 ## Start here
 
@@ -14,6 +14,19 @@ Read the [approved implementation specification, v0.2](docs/figma-gum-plugin-spe
 - **Section 16.2:** copyable implementation-agent handoff prompt.
 
 Repository guidance for coding agents is in [AGENTS.md](AGENTS.md). The specification is authoritative; this README is only an entry point.
+
+## T01 checks
+
+Install the .NET SDK pinned in `global.json` (10.0.100), Node.js and npm, and Python 3. Run from the repository root:
+
+```sh
+dotnet build GumBridge.sln
+python3 -m unittest discover -s tests/architecture -v
+npm ci --prefix apps/figma-plugin
+npm run typecheck --prefix apps/figma-plugin
+```
+
+`dotnet test GumBridge.sln` currently discovers **no .NET test projects**; the executable architecture gate is the Python unittest command above. The pinned TypeScript and official Figma typings are only compilation dependencies, not evidence of a real Figma client test. SDK pins do not establish Gum tooling or native rendering compatibility; those checks start in the next ticket.
 
 ## Architecture
 

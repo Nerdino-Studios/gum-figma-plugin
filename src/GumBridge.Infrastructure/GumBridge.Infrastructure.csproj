@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../GumBridge.Contracts/GumBridge.Contracts.csproj" />
+    <ProjectReference Include="../GumBridge.Application/GumBridge.Application.csproj" />
+  </ItemGroup>
+</Project>

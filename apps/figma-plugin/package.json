@@ -1,0 +1,12 @@
+{
+  "name": "gum-figma-plugin",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "1.138.0",
+    "typescript": "5.9.3"
+  }
+}
