@@ -23,7 +23,10 @@ public sealed class PairingHost : IAsyncDisposable
     private readonly WebApplication app;
     private readonly WorkspaceStore workspaceStore;
     private readonly PublicationStore publicationStore;
+    private readonly PreviewStore previewStore;
+    private readonly PreviewOperation previewOperation;
     private readonly object mutationLock = new();
+    private readonly System.Threading.SemaphoreSlim previewLock = new(1, 1);
     private readonly string dataDirectory;
     private readonly string cliToken;
     private readonly FileStream ownershipLock;
@@ -40,6 +43,8 @@ public sealed class PairingHost : IAsyncDisposable
         cliToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         workspaceStore = new WorkspaceStore(dataDirectory);
         publicationStore = new PublicationStore(dataDirectory, utcNow);
+        previewStore = new PreviewStore(dataDirectory);
+        previewOperation = new PreviewOperation(publicationStore, previewStore);
     }
 
     // Only the local console path calls this method in production; never expose it as HTTP.
@@ -91,7 +96,10 @@ public sealed class PairingHost : IAsyncDisposable
                 var method = request.Headers.AccessControlRequestMethod.ToString();
                 if (origin.Length == 0 || !((request.Path == "/v1/workspaces" && method == "GET") ||
                     ((request.Path == "/v1/pair" || request.Path == "/v1/session" || request.Path == "/v1/publications/begin" || request.Path == "/v1/publications/blobs" || request.Path == "/v1/publications/finalize") && method == "POST") ||
-                    (request.Path == "/v1/publications" && method == "GET")) ||
+                    (request.Path == "/v1/publications" && method == "GET") ||
+                    (request.Path == "/v1/previews" && method == "POST") ||
+                    (request.Path == "/v1/artifacts" && method == "GET") ||
+                    (request.Path == "/v1/preview-target" && method == "GET")) ||
                     request.Headers.AccessControlRequestHeaders.ToString().ToLowerInvariant() is not ("authorization" or "content-type" or "content-type,authorization" or "authorization,content-type"))
                 {
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -140,6 +148,40 @@ public sealed class PairingHost : IAsyncDisposable
         }, request.schemaVersion));
         app.MapGet("/v1/publications", (HttpContext context, string workspaceId) => host.Publication(context, workspaceId, () =>
             Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshots = host.publicationStore.List(workspaceId) }), new SchemaVersion(1, 0)));
+        app.MapGet("/v1/preview-target", (HttpContext context, string workspaceId) =>
+        {
+            if (!host.Authenticated(context)) return Results.Unauthorized();
+            if (host.workspaceStore.Find(workspaceId) is not { } entry) return Results.NotFound();
+            try { return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), workspaceId, targetHash = PreviewOperation.TargetHash(entry) }); }
+            catch (Exception e) when (e is ArgumentException or IOException) { return Results.Conflict(new { code = "TOOLCHAIN_MISMATCH" }); }
+        });
+        app.MapPost("/v1/previews", async (HttpContext context, PreviewRequest request) =>
+        {
+            if (!host.Authenticated(context)) return Results.Unauthorized();
+            if (request.schemaVersion != new SchemaVersion(1, 0) || host.workspaceStore.Find(request.workspaceId) is not { } entry) return Results.BadRequest(new { code = "INVALID_PREVIEW_REQUEST" });
+            if (!await host.previewLock.WaitAsync(0)) return Results.StatusCode(429);
+            try
+            {
+                var (artifactId, outputHash, targetHash) = await host.previewOperation.CreateAsync(entry, request.snapshotId, request.targetHash);
+                return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshotId = request.snapshotId, workspaceId = entry.id, targetHash, outputHash, artifactId });
+            }
+            catch (ArgumentException) { return Results.BadRequest(new { code = "INVALID_PREVIEW_REQUEST" }); }
+            catch (InvalidOperationException e) { return Results.Conflict(new { code = e.Message.Split(':')[0] }); }
+            catch (IOException) { return Results.Conflict(new { code = "VALIDATION_FAILED" }); }
+            finally { host.previewLock.Release(); }
+        });
+        app.MapGet("/v1/artifacts", (HttpContext context, string workspaceId, string snapshotId, string targetHash, string artifactId) =>
+        {
+            if (!host.Authenticated(context)) return Results.Unauthorized();
+            if (host.workspaceStore.Find(workspaceId) is not { } entry) return Results.NotFound();
+            try
+            {
+                if (PreviewOperation.TargetHash(entry) != targetHash) return Results.Conflict(new { code = "STALE_TARGET" });
+                return Results.File(host.previewStore.Read(workspaceId, snapshotId, targetHash, artifactId), "image/png");
+            }
+            catch (ArgumentException) { return Results.NotFound(); }
+            catch (IOException) { return Results.Conflict(new { code = "INVALID_ARTIFACT" }); }
+        });
         app.MapPost("/v1/session", (HttpContext context) =>
         {
             var token = host.Token(context);
@@ -184,6 +226,7 @@ public sealed class PairingHost : IAsyncDisposable
         File.Delete(Path.Combine(dataDirectory, "host.json"));
         ownershipLock.Dispose();
     }
+    private sealed record PreviewRequest(SchemaVersion schemaVersion, string workspaceId, string snapshotId, string targetHash);
     private sealed record BeginRequest(SchemaVersion schemaVersion, string workspaceId, JsonElement snapshot);
     private sealed record BlobRequest(SchemaVersion schemaVersion, string workspaceId, string transferId, string hash, string bytes);
     private sealed record FinalizeRequest(SchemaVersion schemaVersion, string workspaceId, string transferId);

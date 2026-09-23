@@ -19,6 +19,7 @@ public sealed class WorkspaceStore
         entries = File.Exists(file) ? JsonSerializer.Deserialize<List<WorkspaceEntry>>(File.ReadAllText(file)) ?? new() : new();
     }
     public bool Contains(string id) => entries.Any(e => e.id == id);
+    public WorkspaceEntry? Find(string id) => entries.FirstOrDefault(e => e.id == id);
     public object[] List() => entries.Select(e => (object)new { e.id, e.label, e.kind, capability = "native-gum-placeholder", ready = true }).ToArray();
 
     // Reject reparse points at every existing ancestor, including the destination itself.

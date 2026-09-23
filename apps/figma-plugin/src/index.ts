@@ -7,6 +7,15 @@ figma.ui.postMessage(readSelection());
 figma.ui.postMessage({ type: 'namespace-association', retained: retainedNamespace(figma.root) });
 let associated: string | null = null;
 figma.on('selectionchange', () => figma.ui.postMessage(readSelection()));
+let observedPage = figma.currentPage;
+const onNodeChange = () => figma.ui.postMessage({ type: 'source-changed' });
+observedPage.on('nodechange', onNodeChange);
+figma.on('currentpagechange', () => {
+  observedPage.off('nodechange', onNodeChange);
+  observedPage = figma.currentPage;
+  observedPage.on('nodechange', onNodeChange);
+  figma.ui.postMessage({ type: 'source-changed' });
+});
 figma.ui.onmessage = async (message: unknown) => {
   if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'associate-namespace' &&
       'mode' in message && (message.mode === 'new' || message.mode === 'continue') &&

@@ -69,12 +69,38 @@ export class BridgeClient {
     if (result.snapshotId !== bundle.snapshot.snapshotId || (result.status !== 'published' && result.status !== 'blocked')) throw new Error('Unexpected finalization identity; publication not confirmed.');
     return { snapshotId: result.snapshotId, status: result.status };
   }
+  async preview(workspaceId: string, snapshotId: string): Promise<{ targetHash: string; outputHash: string; artifactId: string; png: Uint8Array }> {
+    if (!this.token) throw new Error('Offline — pair before preview.');
+    if (!/^[0-9a-f]{32}$/.test(workspaceId) || !/^sha256:[0-9a-f]{64}$/.test(snapshotId)) throw new Error('Invalid preview identity.');
+    const headers = { Authorization: `Bearer ${this.token}` };
+    const targetResponse = await this.fetcher(`${endpoint}/v1/preview-target?workspaceId=${workspaceId}`, { headers });
+    if (!targetResponse.ok) throw new Error(`Preview target unavailable (${targetResponse.status}).`);
+    const target: unknown = await targetResponse.json();
+    if (!isRecord(target) || target.workspaceId !== workspaceId || !isVersion(target.schemaVersion) || !isHash(target.targetHash)) throw new Error('Invalid preview target identity.');
+    const response = await this.fetcher(`${endpoint}/v1/previews`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schemaVersion: { major: 1, minor: 0 }, workspaceId, snapshotId, targetHash: target.targetHash }),
+    });
+    if (!response.ok) throw new Error(`Preview failed (${response.status}); the published snapshot or target may have changed.`);
+    const result: unknown = await response.json();
+    if (!isRecord(result) || !isVersion(result.schemaVersion) || result.workspaceId !== workspaceId || result.snapshotId !== snapshotId ||
+      result.targetHash !== target.targetHash || !isHash(result.outputHash) || !isHash(result.artifactId)) throw new Error('Mismatched preview provenance.');
+    const query = Object.entries({ workspaceId, snapshotId, targetHash: result.targetHash, artifactId: result.artifactId })
+      .map(([key, value]) => `${key}=${encodeURIComponent(value as string)}`).join('&');
+    const artifact = await this.fetcher(`${endpoint}/v1/artifacts?${query}`, { headers });
+    if (!artifact.ok) throw new Error(`Preview artifact missing or stale (${artifact.status}).`);
+    const bytes = new Uint8Array(await artifact.arrayBuffer());
+    if (bytes.byteLength > 4 * 1024 * 1024 || bytes.byteLength < 24) throw new Error('Invalid preview artifact size.');
+    return { targetHash: target.targetHash, outputHash: result.outputHash, artifactId: result.artifactId, png: bytes };
+  }
   async revoke(): Promise<void> {
     const token = this.token;
     this.token = undefined;
     if (token) await this.fetcher(`${endpoint}/v1/session`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
   }
 }
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
+function isHash(value: unknown): value is string { return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value); }
 function isVersion(value: unknown): value is Version {
   return typeof value === 'object' && value !== null && 'major' in value && value.major === 1 &&
     'minor' in value && value.minor === 0;

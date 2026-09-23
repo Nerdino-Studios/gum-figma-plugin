@@ -8,7 +8,7 @@ test('document namespace persists across launches but requires explicit continue
   const posts = [];
   globalThis.__html__ = '';
   globalThis.figma = {
-    root, currentPage: { selection: [] }, showUI() {}, on() {},
+    root, currentPage: { selection: [], on() {}, off() {} }, showUI() {}, on() {},
     ui: { postMessage: message => posts.push(message), onmessage: null },
   };
   await import('../src/index.ts?launch=1');

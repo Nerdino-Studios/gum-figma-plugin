@@ -206,6 +206,26 @@ public sealed class PublicationStore
         Directory.Delete(stage, true);
         return (transfer.SnapshotId, snapshot.TryGetProperty("extractionDiagnostics", out _) ? "blocked" : "published");
     }
+    public JsonDocument ReadPublished(string workspace, string snapshotId)
+    {
+        if (!Id(workspace) || !Hash(snapshotId)) throw new ArgumentException("Invalid publication identity");
+        var file = Published(workspace, snapshotId);
+        Safe(file);
+        if (!File.Exists(file)) throw new ArgumentException("Snapshot not published");
+        var document = JsonDocument.Parse(File.ReadAllBytes(file));
+        if (!ValidSnapshot(document.RootElement)) { document.Dispose(); throw new IOException("Corrupt published snapshot"); }
+        return document;
+    }
+    public byte[] ReadBlob(string workspace, string hash)
+    {
+        if (!Id(workspace) || !Hash(hash)) throw new ArgumentException("Invalid blob identity");
+        var file = Path.Combine(Workspace(workspace), "blobs", hash[7..]);
+        Safe(file);
+        if (!File.Exists(file)) throw new ArgumentException("Missing published blob");
+        var bytes = File.ReadAllBytes(file);
+        if (bytes.Length > MaxBlob || "sha256:" + Convert.ToHexStringLower(SHA256.HashData(bytes)) != hash) throw new IOException("Corrupt published blob");
+        return bytes;
+    }
     public object[] List(string workspace)
     {
         if (!Id(workspace)) throw new ArgumentException("Invalid workspace");

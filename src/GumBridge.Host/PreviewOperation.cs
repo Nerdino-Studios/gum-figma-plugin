@@ -1,0 +1,167 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Linq;
+using GumBridge.Conversion;
+using GumBridge.Infrastructure.Gum;
+using GumBridge.Infrastructure.Storage;
+
+namespace GumBridge.Host;
+
+// Preview-only operation: copies a trusted sample into disposable staging and never opens a target for writing.
+public sealed class PreviewOperation
+{
+    private readonly PublicationStore publications;
+    private readonly PreviewStore artifacts;
+    public PreviewOperation(PublicationStore publications, PreviewStore artifacts) { this.publications = publications; this.artifacts = artifacts; }
+    public static string TargetHash(WorkspaceEntry entry)
+    {
+        if (entry.kind != "sample") throw new ArgumentException("Preview requires the bundled Sample workspace");
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(System.Text.Encoding.UTF8.GetBytes(entry.id + ":gumcli-2026.9.2.1:"));
+        foreach (var file in SafeFiles(entry.root)
+            .OrderBy(p => Path.GetRelativePath(entry.root, p), StringComparer.Ordinal))
+        {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new IOException("Linked sample input");
+            hash.AppendData(System.Text.Encoding.UTF8.GetBytes(Path.GetRelativePath(entry.root, file).Replace('\\', '/') + "\0"));
+            hash.AppendData(File.ReadAllBytes(file));
+        }
+        return "sha256:" + Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
+    public async Task<(string artifactId, string outputHash, string targetHash)> CreateAsync(WorkspaceEntry entry, string snapshotId, string expectedTargetHash)
+    {
+        var target = TargetHash(entry);
+        if (target != expectedTargetHash) throw new InvalidOperationException("STALE_TARGET");
+        using var document = publications.ReadPublished(entry.id, snapshotId);
+        var snapshot = document.RootElement;
+        var sizes = new Dictionary<string, (double Width, double Height)>();
+        var blobs = new Dictionary<string, byte[]>();
+        long decodedPixels = 0;
+        foreach (var node in snapshot.GetProperty("nodes").EnumerateArray())
+            if (node.TryGetProperty("imageHash", out var image))
+            {
+                var hash = image.GetString()!;
+                var bytes = publications.ReadBlob(entry.id, hash);
+                if (bytes.Length < 24 || !bytes.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })) throw new ArgumentException("INVALID_IMAGE");
+                if (!blobs.ContainsKey(hash))
+                {
+                    var imageWidth = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(16, 4));
+                    var imageHeight = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(20, 4));
+                    decodedPixels = ValidateImagePixels(imageWidth, imageHeight, decodedPixels);
+                    sizes[hash] = (imageWidth, imageHeight);
+                    blobs[hash] = bytes;
+                }
+            }
+        var converted = MinimalConverter.Convert(snapshot, sizes);
+        if (converted.Diagnostics.Count > 0 || converted.Screens.Count != 1) throw new InvalidOperationException("VALIDATION_FAILED: " + string.Join(';', converted.Diagnostics.Select(d => d.Code)));
+        var screen = converted.Screens[0];
+        var root = snapshot.GetProperty("nodes")[0];
+        var width = (int)root.GetProperty("width").GetDouble();
+        var height = (int)root.GetProperty("height").GetDouble();
+        if (width is < 1 or > 2048 || height is < 1 or > 2048 || (long)width * height > 4194304) throw new ArgumentException("Preview dimensions out of bounds");
+        var stage = Path.Combine(Path.GetTempPath(), "gumbridge-preview-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            CopyTree(entry.root, stage);
+            var manifest = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".config", "dotnet-tools.json"));
+            Directory.CreateDirectory(Path.Combine(stage, ".config"));
+            File.Copy(manifest, Path.Combine(stage, ".config", "dotnet-tools.json"));
+            var gumx = Path.Combine(stage, entry.gumx);
+            // Never honor a target's codegen destination, even if it is absolute or traverses out of staging.
+            var settingsPath = Path.Combine(Path.GetDirectoryName(gumx)!, "ProjectCodeSettings.codsj");
+            if (!File.Exists(settingsPath)) throw new InvalidOperationException("Missing code generation settings");
+            {
+                var settings = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject
+                    ?? throw new InvalidOperationException("Invalid code generation settings");
+                var generated = Path.Combine(stage, "PreviewGenerated");
+                Directory.CreateDirectory(generated);
+                settings["CodeProjectRoot"] = Path.GetRelativePath(Path.GetDirectoryName(gumx)!, generated).Replace('\\', '/') + "/";
+                File.WriteAllText(settingsPath, settings.ToJsonString());
+            }
+            var project = XDocument.Load(gumx);
+            if (project.Root?.Element("FontGenerator")?.Value != "KernSmith") throw new InvalidOperationException("TOOLCHAIN_MISMATCH: expected KernSmith");
+            var references = project.Root!.Elements("ScreenReference").ToArray();
+            foreach (var reference in references) reference.Remove();
+            project.Root.Add(new XElement("ScreenReference", new XAttribute("Name", screen.Name)));
+            project.Save(gumx);
+            var screens = Path.Combine(Path.GetDirectoryName(gumx)!, "Screens");
+            Directory.CreateDirectory(screens);
+            File.WriteAllText(Path.Combine(screens, screen.Name + ".gusx"), GumModelSerializer.Serialize(screen));
+            foreach (var (hash, bytes) in blobs)
+            {
+                var path = Path.Combine(Path.GetDirectoryName(gumx)!, "Assets", "Images", hash[7..] + ".png");
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllBytes(path, bytes);
+            }
+            await Run(stage, "check", gumx);
+            await Run(stage, "fonts", gumx);
+            if (snapshot.GetProperty("nodes").EnumerateArray().Any(node => node.GetProperty("type").GetString() == "TEXT") &&
+                !File.Exists(Path.Combine(Path.GetDirectoryName(gumx)!, "FontCache", "Font24Arial.fnt"))) throw new InvalidOperationException("MISSING_FONT");
+            await Run(stage, "codegen", gumx);
+            var png = Path.Combine(stage, "result.png");
+            await Run(stage, "screenshot", gumx, screen.Name, "--output", png, "--width", width.ToString(), "--height", height.ToString(), "--backend", "monogame");
+            if (TargetHash(entry) != target) throw new InvalidOperationException("STALE_TARGET");
+            var artifactId = artifacts.Create(entry.id, snapshotId, target, File.ReadAllBytes(png));
+            return (artifactId, artifacts.OutputHash(entry.id, snapshotId, target, artifactId), target);
+        }
+        finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+    }
+    public static void ValidateImagePixels(IEnumerable<(uint Width, uint Height)> images)
+    {
+        long total = 0;
+        foreach (var (width, height) in images) total = ValidateImagePixels(width, height, total);
+    }
+    private static long ValidateImagePixels(uint width, uint height, long total)
+    {
+        // Each decoded RGBA image is at most 16 MiB; the unique source set at most 64 MiB.
+        if (width is < 1 or > 4096 || height is < 1 or > 4096 ||
+            (long)width * height > 4194304 || total + (long)width * height > 16777216)
+            throw new ArgumentException("IMAGE_PIXELS_EXCEEDED");
+        return total + (long)width * height;
+    }
+    private static IEnumerable<string> SafeFiles(string directory)
+    {
+        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) throw new IOException("Linked sample directory");
+        foreach (var file in Directory.GetFiles(directory))
+        {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new IOException("Linked sample file");
+            yield return file;
+        }
+        foreach (var child in Directory.GetDirectories(directory))
+            if (Path.GetFileName(child) is not ("bin" or "obj" or "FontCache"))
+                foreach (var file in SafeFiles(child)) yield return file;
+    }
+    private static void CopyTree(string source, string destination)
+    {
+        if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0) throw new IOException("Linked sample root");
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.GetFiles(source))
+        {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new IOException("Linked sample file");
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+        }
+        foreach (var directory in Directory.GetDirectories(source))
+            if (Path.GetFileName(directory) is not ("bin" or "obj" or "FontCache")) CopyTree(directory, Path.Combine(destination, Path.GetFileName(directory)));
+    }
+    private static async Task Run(string stage, params string[] args)
+    {
+        using var process = new Process { StartInfo = new ProcessStartInfo("dotnet") { WorkingDirectory = stage, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false } };
+        process.StartInfo.Environment["DOTNET_ROLL_FORWARD"] = "Major";
+        process.StartInfo.ArgumentList.Add("tool"); process.StartInfo.ArgumentList.Add("run"); process.StartInfo.ArgumentList.Add("gumcli"); process.StartInfo.ArgumentList.Add("--");
+        foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
+        process.Start();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
+        try { await process.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException) { process.Kill(true); throw new InvalidOperationException("TOOLCHAIN_TIMEOUT"); }
+        if (process.ExitCode != 0) throw new InvalidOperationException("VALIDATION_FAILED: gumcli " + args[0] + ": " + (await stderr)[..Math.Min((await stderr).Length, 500)]);
+        await stdout; await stderr;
+    }
+}
