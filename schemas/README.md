@@ -1,0 +1,7 @@
+# GAM-206 wire skeletons (major 1)
+
+`wire-v1.schema.json` defines four named shapes under `$defs`: `request`, `snapshot`, `catalog`, and `diagnostic`. `contract-vectors.json` is consumed unchanged by both the plugin TypeScript validator and .NET Contracts tests. These are **shape checks**, not published snapshots or transport operations.
+
+`schemaVersion` is `{ "major": 1, "minor": 0 }`. Reject other major versions; accept nonnegative minor versions through 2147483647 only when all semantic fields remain understood. Unknown fields at the top level or in `schemaVersion` are rejected even with a newer minor. A future use case must add its own named semantic fields and vectors before using them. `extensions` is an optional object whose dotted namespaced keys hold nonempty *informational text only*. It cannot carry layout, mappings, commands, or other operational semantics. Callers must not use it to influence behavior.
+
+For now `nodes` and `controls` must be empty: node/control shapes, canonical hashes, component dependencies, catalog mappings, and publication are deliberately deferred. The request `operation` is a nonempty opaque name; no operation is executed by this validator. The snapshot ID is nonempty text, not yet a verified content hash. Minimal diagnostic severities are `info`, `warning`, and `error`. Do not treat an accepted skeleton as a complete publishable design or a verified target catalog.

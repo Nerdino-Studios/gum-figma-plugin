@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nerdino.studio/gum-bridge/wire-v1.schema.json",
+  "description": "GAM-206 minimal wire shapes. Select a named definition for the contract kind; arrays of semantic entities remain empty until their owning use case defines them.",
+  "$defs": {
+    "version": {
+      "type": "object", "required": ["major", "minor"], "additionalProperties": false,
+      "properties": {"major": {"const": 1}, "minor": {"type": "integer", "minimum": 0, "maximum": 2147483647}}
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z][A-Za-z0-9-]*(\\.[A-Za-z][A-Za-z0-9-]*)+$"},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "text": {"type": "string", "minLength": 1},
+    "request": {
+      "type": "object", "required": ["schemaVersion", "operation"], "additionalProperties": false,
+      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "operation": {"$ref": "#/$defs/text"}, "extensions": {"$ref": "#/$defs/extensions"}}
+    },
+    "snapshot": {
+      "type": "object", "required": ["schemaVersion", "snapshotId", "documentNamespace", "selectedRootIds", "nodes"], "additionalProperties": false,
+      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "snapshotId": {"$ref": "#/$defs/text"}, "documentNamespace": {"$ref": "#/$defs/text"}, "selectedRootIds": {"type": "array", "items": {"$ref": "#/$defs/text"}}, "nodes": {"type": "array", "maxItems": 0}, "extensions": {"$ref": "#/$defs/extensions"}}
+    },
+    "catalog": {
+      "type": "object", "required": ["schemaVersion", "catalogId", "revision", "controls"], "additionalProperties": false,
+      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "catalogId": {"$ref": "#/$defs/text"}, "revision": {"$ref": "#/$defs/text"}, "controls": {"type": "array", "maxItems": 0}, "extensions": {"$ref": "#/$defs/extensions"}}
+    },
+    "diagnostic": {
+      "type": "object", "required": ["schemaVersion", "code", "severity", "message"], "additionalProperties": false,
+      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "code": {"$ref": "#/$defs/text"}, "severity": {"enum": ["info", "warning", "error"]}, "message": {"$ref": "#/$defs/text"}, "extensions": {"$ref": "#/$defs/extensions"}}
+    }
+  }
+}
