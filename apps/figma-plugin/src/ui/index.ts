@@ -77,7 +77,22 @@ function render(): void {
       const newButton = document.createElement('button');
       newButton.textContent = 'New design namespace';
       newButton.addEventListener('click', () => {
-        parent.postMessage({ pluginMessage: { type: 'associate-namespace', mode: 'new', namespace: crypto.randomUUID() } }, '*');
+        if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') {
+          publicationStatus = 'Namespace unavailable: this iframe has no suitable random source.';
+          render();
+          return;
+        }
+        try {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const bytes = crypto.getRandomValues(new Uint8Array(16));
+            const next = 'design-' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+            if (next === retained) continue;
+            parent.postMessage({ pluginMessage: { type: 'associate-namespace', mode: 'new', namespace: next } }, '*');
+            return;
+          }
+        } catch { /* No usable random bytes; report the failure in the panel. */ }
+        publicationStatus = 'Namespace unavailable: could not create a distinct namespace.';
+        render();
       });
       const continueButton = document.createElement('button');
       continueButton.textContent = 'Continue known design';
