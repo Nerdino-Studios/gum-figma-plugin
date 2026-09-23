@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using GumBridge.Infrastructure.Storage;
 
 namespace GumBridge.Host;
 
@@ -21,6 +22,7 @@ public sealed class PairingHost : IAsyncDisposable
 {
     private readonly WebApplication app;
     private readonly WorkspaceStore workspaceStore;
+    private readonly PublicationStore publicationStore;
     private readonly object mutationLock = new();
     private readonly string dataDirectory;
     private readonly string cliToken;
@@ -37,6 +39,7 @@ public sealed class PairingHost : IAsyncDisposable
         this.ownershipLock = ownershipLock;
         cliToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         workspaceStore = new WorkspaceStore(dataDirectory);
+        publicationStore = new PublicationStore(dataDirectory, utcNow);
     }
 
     // Only the local console path calls this method in production; never expose it as HTTP.
@@ -61,7 +64,7 @@ public sealed class PairingHost : IAsyncDisposable
         var ownershipLock = new FileStream(Path.Combine(data, "host.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders(); // Requests, challenge bodies and tokens must not enter normal logs.
-        builder.WebHost.UseKestrel(options => { options.Limits.MaxRequestBodySize = 1024; options.Listen(IPAddress.Loopback, port); });
+        builder.WebHost.UseKestrel(options => { options.Limits.MaxRequestBodySize = 6 * 1024 * 1024; options.Listen(IPAddress.Loopback, port); });
         var app = builder.Build();
         var host = new PairingHost(app, utcNow ?? (() => DateTimeOffset.UtcNow), data, ownershipLock);
         app.Use(async (context, next) =>
@@ -87,7 +90,8 @@ public sealed class PairingHost : IAsyncDisposable
             {
                 var method = request.Headers.AccessControlRequestMethod.ToString();
                 if (origin.Length == 0 || !((request.Path == "/v1/workspaces" && method == "GET") ||
-                    ((request.Path == "/v1/pair" || request.Path == "/v1/session") && method == "POST")) ||
+                    ((request.Path == "/v1/pair" || request.Path == "/v1/session" || request.Path == "/v1/publications/begin" || request.Path == "/v1/publications/blobs" || request.Path == "/v1/publications/finalize") && method == "POST") ||
+                    (request.Path == "/v1/publications" && method == "GET")) ||
                     request.Headers.AccessControlRequestHeaders.ToString().ToLowerInvariant() is not ("authorization" or "content-type" or "content-type,authorization" or "authorization,content-type"))
                 {
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -119,6 +123,23 @@ public sealed class PairingHost : IAsyncDisposable
             host.LocalAuthorized(context) ? host.Mutate(() => host.workspaceStore.Init(request.directory)) : Results.Unauthorized());
         app.MapPost("/v1/local/register", (HttpContext context, LocalRegistration request) =>
             host.LocalAuthorized(context) ? host.Mutate(() => host.workspaceStore.Register(request.directory, request.project, request.gumx)) : Results.Unauthorized());
+        app.MapPost("/v1/publications/begin", (HttpContext context, BeginRequest request) => host.Publication(context, request.workspaceId, () =>
+        {
+            var (transferId, missing) = host.publicationStore.Begin(request.workspaceId, request.snapshot);
+            return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), transferId, missing });
+        }, request.schemaVersion));
+        app.MapPost("/v1/publications/blobs", (HttpContext context, BlobRequest request) => host.Publication(context, request.workspaceId, () =>
+        {
+            host.publicationStore.Upload(request.workspaceId, request.transferId, request.hash, request.bytes);
+            return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), accepted = true });
+        }, request.schemaVersion));
+        app.MapPost("/v1/publications/finalize", (HttpContext context, FinalizeRequest request) => host.Publication(context, request.workspaceId, () =>
+        {
+            var (snapshotId, status) = host.publicationStore.Finalize(request.workspaceId, request.transferId);
+            return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshotId, status });
+        }, request.schemaVersion));
+        app.MapGet("/v1/publications", (HttpContext context, string workspaceId) => host.Publication(context, workspaceId, () =>
+            Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshots = host.publicationStore.List(workspaceId) }), new SchemaVersion(1, 0)));
         app.MapPost("/v1/session", (HttpContext context) =>
         {
             var token = host.Token(context);
@@ -131,6 +152,16 @@ public sealed class PairingHost : IAsyncDisposable
         File.WriteAllText(descriptor, JsonSerializer.Serialize(new LocalDescriptor(host.Address, host.cliToken)));
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(descriptor, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return host;
+    }
+    private IResult Publication(HttpContext context, string workspace, Func<IResult> action, SchemaVersion version)
+    {
+        if (!Authenticated(context)) return Results.Unauthorized();
+        if (version != new SchemaVersion(1, 0) || !workspaceStore.Contains(workspace)) return Results.BadRequest(new { code = "INVALID_PUBLICATION_REQUEST" });
+        try { lock (mutationLock) return action(); }
+        catch (ArgumentException) { return Results.BadRequest(new { code = "INVALID_PUBLICATION_REQUEST" }); }
+        catch (InvalidOperationException) { return Results.Conflict(new { code = "INCOMPLETE_PUBLICATION" }); }
+        catch (IOException) { return Results.Conflict(new { code = "PUBLICATION_CONFLICT" }); }
+        catch (JsonException) { return Results.BadRequest(new { code = "INVALID_PUBLICATION_REQUEST" }); }
     }
     private string? Token(HttpContext context)
     {
@@ -153,6 +184,9 @@ public sealed class PairingHost : IAsyncDisposable
         File.Delete(Path.Combine(dataDirectory, "host.json"));
         ownershipLock.Dispose();
     }
+    private sealed record BeginRequest(SchemaVersion schemaVersion, string workspaceId, JsonElement snapshot);
+    private sealed record BlobRequest(SchemaVersion schemaVersion, string workspaceId, string transferId, string hash, string bytes);
+    private sealed record FinalizeRequest(SchemaVersion schemaVersion, string workspaceId, string transferId);
     private sealed record LocalSample(string directory);
     private sealed record LocalRegistration(string directory, string project, string gumx);
     private sealed record PairRequest(string challenge);

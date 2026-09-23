@@ -52,7 +52,7 @@ function textArray(value: unknown): boolean {
 export function validateContract(kind: string, value: unknown): boolean {
   if (!Object.hasOwn(fields, kind) || !record(value)) return false;
   const required = fields[kind as ContractKind];
-  const allowed = ['schemaVersion', ...required, 'extensions'];
+  const allowed = ['schemaVersion', ...required, 'extensions', ...(kind === 'snapshot' ? ['extractionDiagnostics'] : [])];
   if (!required.every(key => Object.hasOwn(value, key)) || !Object.keys(value).every(key => allowed.includes(key))) return false;
 
   const version = value.schemaVersion;
@@ -66,7 +66,10 @@ export function validateContract(kind: string, value: unknown): boolean {
 
   switch (kind) {
     case 'request': return text(value.operation);
-    case 'snapshot': return text(value.snapshotId) && text(value.documentNamespace) &&
+    case 'snapshot': return (!Object.hasOwn(value, 'extractionDiagnostics') ||
+      Array.isArray(value.extractionDiagnostics) && value.extractionDiagnostics.length > 0 &&
+      value.extractionDiagnostics.every(d => validateContract('diagnostic', d) && d.severity === 'error' && d.code === 'UNSUPPORTED_FEATURE')) &&
+      text(value.snapshotId) && text(value.documentNamespace) &&
       textArray(value.selectedRootIds) && aliasesValid(value.rootAliases) &&
       (value.rootAliases as { rootId: string }[]).every(entry => (value.selectedRootIds as string[]).includes(entry.rootId)) &&
       Array.isArray(value.nodes) && value.nodes.every(validNode);

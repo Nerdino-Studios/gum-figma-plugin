@@ -25,7 +25,7 @@ public static class WireContracts
         };
         if (required is null || value.ValueKind != JsonValueKind.Object ||
             !required.All(key => value.TryGetProperty(key, out _)) ||
-            value.EnumerateObject().Any(p => p.Name != "schemaVersion" && p.Name != "extensions" && !required.Contains(p.Name)) ||
+            value.EnumerateObject().Any(p => p.Name != "schemaVersion" && p.Name != "extensions" && !(kind == "snapshot" && p.Name == "extractionDiagnostics") && !required.Contains(p.Name)) ||
             !value.TryGetProperty("schemaVersion", out var version) || !ValidVersion(version)) return false;
 
         if (value.TryGetProperty("extensions", out var extensions) &&
@@ -35,7 +35,10 @@ public static class WireContracts
         return kind switch
         {
             "request" => Text(value.GetProperty("operation")),
-            "snapshot" => Text(value.GetProperty("snapshotId")) && Text(value.GetProperty("documentNamespace")) &&
+            "snapshot" => (!value.TryGetProperty("extractionDiagnostics", out var diagnostics) ||
+                diagnostics.ValueKind == JsonValueKind.Array && diagnostics.GetArrayLength() > 0 && diagnostics.EnumerateArray().All(d => Validate("diagnostic", d) &&
+                    d.GetProperty("severity").GetString() == "error" && d.GetProperty("code").GetString() == "UNSUPPORTED_FEATURE")) &&
+                Text(value.GetProperty("snapshotId")) && Text(value.GetProperty("documentNamespace")) &&
                 TextArray(value.GetProperty("selectedRootIds")) && ValidAliases(value.GetProperty("rootAliases"), value.GetProperty("selectedRootIds")) && NodeArray(value.GetProperty("nodes")),
             "catalog" => Text(value.GetProperty("catalogId")) && Text(value.GetProperty("revision")) &&
                 EmptyArray(value.GetProperty("controls")),
