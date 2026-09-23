@@ -1,6 +1,7 @@
 // The sole plugin network client. Tokens live only in this iframe instance, never in scene or plugin data.
 export type Version = { major: 1; minor: 0 };
-export type WorkspaceList = { schemaVersion: Version; workspaces: unknown[] };
+export type Workspace = { id: string; label: string; kind: 'sample' | 'existing'; capability: 'native-gum-placeholder'; ready: boolean };
+export type WorkspaceList = { schemaVersion: Version; workspaces: Workspace[] };
 export type PairResponse = { token: string; schemaVersion: Version };
 const endpoint = 'http://localhost:48931';
 
@@ -44,7 +45,17 @@ function isPairResponse(value: unknown): value is PairResponse {
   return typeof value === 'object' && value !== null && 'schemaVersion' in value && isVersion(value.schemaVersion) &&
     'token' in value && typeof value.token === 'string' && /^[0-9A-F]{64}$/.test(value.token);
 }
+function isWorkspace(value: unknown): value is Workspace {
+  if (typeof value !== 'object' || value === null) return false;
+  const keys = Object.keys(value);
+  return keys.length === 5 && keys.every(key => ['id', 'label', 'kind', 'capability', 'ready'].includes(key)) &&
+    'id' in value && typeof value.id === 'string' && /^[0-9a-f]{32}$/.test(value.id) &&
+    'label' in value && typeof value.label === 'string' && value.label.length <= 100 &&
+    'kind' in value && (value.kind === 'sample' || value.kind === 'existing') &&
+    'capability' in value && value.capability === 'native-gum-placeholder' &&
+    'ready' in value && typeof value.ready === 'boolean';
+}
 function isWorkspaceList(value: unknown): value is WorkspaceList {
   return typeof value === 'object' && value !== null && 'schemaVersion' in value && isVersion(value.schemaVersion) &&
-    'workspaces' in value && Array.isArray(value.workspaces);
+    'workspaces' in value && Array.isArray(value.workspaces) && value.workspaces.every(isWorkspace);
 }

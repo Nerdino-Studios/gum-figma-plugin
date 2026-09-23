@@ -21,6 +21,16 @@ test('pairing keeps credentials in client memory and uses only fixed loopback ro
   assert.equal(calls[1][0], 'http://localhost:48931/v1/workspaces');
   assert.equal(calls[0][1].body, JSON.stringify({ challenge }));
 });
+test('authenticated workspace list accepts safe labels and rejects path disclosures', async () => {
+  const entries = [{ id: 'a'.repeat(32), label: 'Sample workspace', kind: 'sample', capability: 'native-gum-placeholder', ready: true }];
+  const client = new BridgeClient(async (url) => ({ ok: true, json: async () => url.endsWith('/pair')
+    ? { token, schemaVersion: { major: 1, minor: 0 } }
+    : { schemaVersion: { major: 1, minor: 0 }, workspaces: entries } }));
+  await client.pair(challenge);
+  assert.deepEqual((await client.workspaces()).workspaces, entries);
+  entries[0] = { ...entries[0], root: '/private/secrets' };
+  await assert.rejects(client.workspaces(), /unsupported format/);
+});
 test('default fetch retains its Window receiver for pair, workspaces, and revoke', async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];

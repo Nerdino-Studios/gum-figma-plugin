@@ -43,7 +43,9 @@ function render(): void {
       try {
         await bridge.pair(challenge);
         const result = await bridge.workspaces();
-        connectionStatus = `Paired; ${result.workspaces.length} registered workspaces (registration is not available yet).`;
+        connectionStatus = result.workspaces.length === 0
+          ? 'Paired; no workspaces yet. Run gumbridge sample init --directory <new-absolute-directory> locally.'
+          : `Paired; ${result.workspaces.map(workspace => `${workspace.label} (${workspace.capability}; native Gum only, not a runnable game)`).join(', ')}. Workspace selection and generation are not available yet.`;
       } catch (error) {
         connectionStatus = error instanceof Error ? error.message : 'Bridge unavailable; check the local host.';
       }

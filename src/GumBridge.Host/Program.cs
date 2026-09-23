@@ -9,8 +9,8 @@ public static class Program
     {
         if (args.Length != 1 || args[0] != "serve")
         {
-            Console.Error.WriteLine("Usage: dotnet run --project src/GumBridge.Host -- serve");
-            Environment.ExitCode = 2;
+            Environment.ExitCode = await WorkspaceCli.RunAsync(args);
+            if (Environment.ExitCode == 2) Console.Error.WriteLine("Usage: gumbridge serve | sample init --directory <absolute-new-root> | workspace register --directory <absolute-root> --project <relative.csproj> --gumx <relative.gumx>");
             return;
         }
         await using var host = await PairingHost.StartAsync();
