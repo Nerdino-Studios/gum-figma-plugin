@@ -8,6 +8,7 @@ let workspaceId: string | undefined;
 let namespace = '';
 let retained: string | null = null;
 let associated = false;
+let setupRequired = false;
 let busy = false;
 let alias = '';
 let publicationStatus = 'Unpublished — select a frame, pair, then capture and publish.';
@@ -34,7 +35,8 @@ function render(): void {
     button.addEventListener('click', () => { active = tab.key; render(); });
     navigation.append(button);
   }
-  content.textContent = active === 'connection' ? connectionStatus : active === 'preview' ? publicationStatus : panel[active];
+  content.textContent = setupRequired ? publicationStatus : active === 'connection' ? connectionStatus : active === 'preview' ? publicationStatus : panel[active];
+  if (setupRequired) return;
   if (active === 'preview' && previewUrl) {
     const identity = document.createElement('p');
     identity.textContent = `${stale ? 'Stale — source or workspace changed. ' : ''}${previewIdentity}`;
@@ -160,6 +162,11 @@ window.addEventListener('message', event => {
       sourceRevision++;
       if (publishedId) { stale = true; publishedStale = true; publicationStatus = 'Source changed — republish before treating this preview as current.'; render(); }
       return;
+    }
+    if (message.type === 'plugin-setup-required' && 'message' in message) {
+      setupRequired = true;
+      publicationStatus = `Setup required: ${String(message.message)}`;
+      render(); return;
     }
     if (message.type === 'namespace-association' && 'retained' in message) {
       retained = typeof message.retained === 'string' ? message.retained : null;
