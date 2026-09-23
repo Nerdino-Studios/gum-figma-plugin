@@ -1,30 +1,851 @@
 [
-  {"name":"request minimal","kind":"request","valid":true,"value":{"schemaVersion":{"major":1,"minor":0},"operation":"inspect"}},
-  {"name":"snapshot minimal","kind":"snapshot","valid":true,"value":{"schemaVersion":{"major":1,"minor":0},"snapshotId":"sha256:abc","documentNamespace":"design-1","selectedRootIds":["1:2"],"nodes":[]}},
-  {"name":"catalog minimal","kind":"catalog","valid":true,"value":{"schemaVersion":{"major":1,"minor":0},"catalogId":"builtin","revision":"1","controls":[]}},
-  {"name":"diagnostic minimal","kind":"diagnostic","valid":true,"value":{"schemaVersion":{"major":1,"minor":0},"code":"UNSUPPORTED","severity":"error","message":"Unsupported feature"}},
-  {"name":"informational extension","kind":"request","valid":true,"value":{"schemaVersion":{"major":1,"minor":4},"operation":"inspect","extensions":{"org.example.note":"For display only"}}},
-  {"name":"decimal major and exponent minor","kind":"request","valid":true,"value":{"schemaVersion":{"major":1.0,"minor":0e0},"operation":"inspect"}},
-  {"name":"exponent major and decimal minor","kind":"diagnostic","valid":true,"value":{"schemaVersion":{"major":1e0,"minor":2147483647.0},"code":"OK","severity":"info","message":"Valid"}},
-  {"name":"fractional exponent minor","kind":"request","valid":false,"value":{"schemaVersion":{"major":1.0,"minor":1.5e0},"operation":"inspect"}},
-  {"name":"out of range exponent minor","kind":"request","valid":false,"value":{"schemaVersion":{"major":1e0,"minor":2.147483648e9},"operation":"inspect"}},
-  {"name":"unsupported major","kind":"request","valid":false,"value":{"schemaVersion":{"major":2,"minor":0},"operation":"inspect"}},
-  {"name":"negative minor","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":-1},"operation":"inspect"}},
-  {"name":"fractional major","kind":"request","valid":false,"value":{"schemaVersion":{"major":1.5,"minor":0},"operation":"inspect"}},
-  {"name":"extra version key","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":0,"patch":1},"operation":"inspect"}},
-  {"name":"missing operation","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":0}}},
-  {"name":"empty operation","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"operation":""}},
-  {"name":"semantic unknown request","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"operation":"inspect","layoutMode":"fill"}},
-  {"name":"missing snapshot roots","kind":"snapshot","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"snapshotId":"id","documentNamespace":"ns","nodes":[]}},
-  {"name":"invalid snapshot nodes","kind":"snapshot","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"snapshotId":"id","documentNamespace":"ns","selectedRootIds":[],"nodes":[{"id":"1"}]}},
-  {"name":"semantic unknown snapshot","kind":"snapshot","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"snapshotId":"id","documentNamespace":"ns","selectedRootIds":[],"nodes":[],"padding":8}},
-  {"name":"missing catalog revision","kind":"catalog","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"catalogId":"builtin","controls":[]}},
-  {"name":"invalid catalog controls","kind":"catalog","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"catalogId":"builtin","revision":"1","controls":[{}]}},
-  {"name":"semantic unknown catalog","kind":"catalog","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"catalogId":"builtin","revision":"1","controls":[],"slots":[]}},
-  {"name":"invalid diagnostic severity","kind":"diagnostic","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"code":"BAD","severity":"fatal","message":"Bad"}},
-  {"name":"missing diagnostic code","kind":"diagnostic","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"severity":"error","message":"Bad"}},
-  {"name":"semantic unknown diagnostic","kind":"diagnostic","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"code":"BAD","severity":"error","message":"Bad","fix":"execute"}},
-  {"name":"extension object rejected","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"operation":"inspect","extensions":{"org.example.note":{"layout":"fill"}}}},
-  {"name":"extension key not namespaced","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"operation":"inspect","extensions":{"note":"hello"}}},
-  {"name":"extension empty text","kind":"request","valid":false,"value":{"schemaVersion":{"major":1,"minor":0},"operation":"inspect","extensions":{"org.example.note":""}}}
+  {
+    "name": "request minimal",
+    "kind": "request",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "snapshot minimal",
+    "kind": "snapshot",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "catalog minimal",
+    "kind": "catalog",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "catalogId": "builtin",
+      "revision": "1",
+      "controls": []
+    }
+  },
+  {
+    "name": "diagnostic minimal",
+    "kind": "diagnostic",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "code": "UNSUPPORTED",
+      "severity": "error",
+      "message": "Unsupported feature"
+    }
+  },
+  {
+    "name": "informational extension",
+    "kind": "request",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 4
+      },
+      "operation": "inspect",
+      "extensions": {
+        "org.example.note": "For display only"
+      }
+    }
+  },
+  {
+    "name": "decimal major and exponent minor",
+    "kind": "request",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1.0,
+        "minor": 0.0
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "exponent major and decimal minor",
+    "kind": "diagnostic",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1.0,
+        "minor": 2147483647.0
+      },
+      "code": "OK",
+      "severity": "info",
+      "message": "Valid"
+    }
+  },
+  {
+    "name": "fractional exponent minor",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1.0,
+        "minor": 1.5
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "out of range exponent minor",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1.0,
+        "minor": 2147483648.0
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "unsupported major",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 2,
+        "minor": 0
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "negative minor",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": -1
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "fractional major",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1.5,
+        "minor": 0
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "extra version key",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0,
+        "patch": 1
+      },
+      "operation": "inspect"
+    }
+  },
+  {
+    "name": "missing operation",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      }
+    }
+  },
+  {
+    "name": "empty operation",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "operation": ""
+    }
+  },
+  {
+    "name": "semantic unknown request",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "operation": "inspect",
+      "layoutMode": "fill"
+    }
+  },
+  {
+    "name": "missing snapshot roots",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "id",
+      "documentNamespace": "ns",
+      "nodes": [],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "invalid snapshot nodes",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "id",
+      "documentNamespace": "ns",
+      "selectedRootIds": [],
+      "nodes": [
+        {
+          "id": "1"
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "semantic unknown snapshot",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "id",
+      "documentNamespace": "ns",
+      "selectedRootIds": [],
+      "nodes": [],
+      "padding": 8,
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "missing catalog revision",
+    "kind": "catalog",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "catalogId": "builtin",
+      "controls": []
+    }
+  },
+  {
+    "name": "invalid catalog controls",
+    "kind": "catalog",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "catalogId": "builtin",
+      "revision": "1",
+      "controls": [
+        {}
+      ]
+    }
+  },
+  {
+    "name": "semantic unknown catalog",
+    "kind": "catalog",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "catalogId": "builtin",
+      "revision": "1",
+      "controls": [],
+      "slots": []
+    }
+  },
+  {
+    "name": "invalid diagnostic severity",
+    "kind": "diagnostic",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "code": "BAD",
+      "severity": "fatal",
+      "message": "Bad"
+    }
+  },
+  {
+    "name": "missing diagnostic code",
+    "kind": "diagnostic",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "severity": "error",
+      "message": "Bad"
+    }
+  },
+  {
+    "name": "semantic unknown diagnostic",
+    "kind": "diagnostic",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "code": "BAD",
+      "severity": "error",
+      "message": "Bad",
+      "fix": "execute"
+    }
+  },
+  {
+    "name": "extension object rejected",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "operation": "inspect",
+      "extensions": {
+        "org.example.note": {
+          "layout": "fill"
+        }
+      }
+    }
+  },
+  {
+    "name": "extension key not namespaced",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "operation": "inspect",
+      "extensions": {
+        "note": "hello"
+      }
+    }
+  },
+  {
+    "name": "extension empty text",
+    "kind": "request",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "operation": "inspect",
+      "extensions": {
+        "org.example.note": ""
+      }
+    }
+  },
+  {
+    "name": "typed frame snapshot",
+    "kind": "snapshot",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "unknown node semantics",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false,
+          "padding": 8
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "invalid width",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": -1,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "missing frame layout",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": null,
+          "clipsContent": false
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "typed snapshot unsupported major",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 2,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "typed text child",
+    "kind": "snapshot",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        },
+        {
+          "id": "child",
+          "parentId": "1:2",
+          "type": "TEXT",
+          "name": "Child",
+          "x": 1,
+          "y": 1,
+          "width": 20,
+          "height": 10,
+          "visible": true,
+          "characters": "Hello",
+          "fontSize": 12,
+          "fontFamily": "Inter",
+          "fontStyle": "Regular",
+          "color": "#ffffff"
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "invalid mixed font",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        },
+        {
+          "id": "child",
+          "parentId": "1:2",
+          "type": "TEXT",
+          "name": "Child",
+          "x": 1,
+          "y": 1,
+          "width": 20,
+          "height": 10,
+          "visible": true,
+          "characters": "Hello",
+          "fontSize": 12,
+          "fontFamily": null,
+          "fontStyle": "Regular",
+          "color": "#ffffff"
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "typed image child",
+    "kind": "snapshot",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        },
+        {
+          "id": "child",
+          "parentId": "1:2",
+          "type": "IMAGE",
+          "name": "Child",
+          "x": 1,
+          "y": 1,
+          "width": 20,
+          "height": 10,
+          "visible": true,
+          "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "scaleMode": "FIT"
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "invalid asset hash",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        },
+        {
+          "id": "child",
+          "parentId": "1:2",
+          "type": "IMAGE",
+          "name": "Child",
+          "x": 1,
+          "y": 1,
+          "width": 20,
+          "height": 10,
+          "visible": true,
+          "imageHash": "sha256:bad",
+          "scaleMode": "FIT"
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "image unknown paint",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "design-1",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": [
+        {
+          "id": "1:2",
+          "parentId": null,
+          "type": "FRAME",
+          "name": "Menu",
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 720,
+          "visible": true,
+          "layoutMode": "VERTICAL",
+          "clipsContent": false
+        },
+        {
+          "id": "child",
+          "parentId": "1:2",
+          "type": "IMAGE",
+          "name": "Child",
+          "x": 1,
+          "y": 1,
+          "width": 20,
+          "height": 10,
+          "visible": true,
+          "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "scaleMode": "FIT",
+          "color": "#ffffff"
+        }
+      ],
+      "rootAliases": []
+    }
+  },
+  {
+    "name": "snapshot alias",
+    "kind": "snapshot",
+    "valid": true,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "ns",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "rootAliases": [
+        {
+          "rootId": "1:2",
+          "alias": "StartScreen"
+        }
+      ],
+      "nodes": []
+    }
+  },
+  {
+    "name": "invalid alias shape",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "ns",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "rootAliases": [
+        {
+          "rootId": "1:2",
+          "alias": 3
+        }
+      ],
+      "nodes": []
+    }
+  },
+  {
+    "name": "missing aliases",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": {
+        "major": 1,
+        "minor": 0
+      },
+      "snapshotId": "sha256:abc",
+      "documentNamespace": "ns",
+      "selectedRootIds": [
+        "1:2"
+      ],
+      "nodes": []
+    }
+  }
 ]

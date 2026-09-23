@@ -1,33 +1,414 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nerdino.studio/gum-bridge/wire-v1.schema.json",
-  "description": "GAM-206 minimal wire shapes. Select a named definition for the contract kind; arrays of semantic entities remain empty until their owning use case defines them.",
+  "description": "Wire v1 thin selected-root typed frame/text/image snapshot shapes; no publication or conversion.",
   "$defs": {
+    "node": {
+      "type": "object",
+      "required": [
+        "id",
+        "parentId",
+        "type",
+        "name",
+        "x",
+        "y",
+        "width",
+        "height",
+        "visible"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/text"
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "enum": [
+            "FRAME",
+            "TEXT",
+            "IMAGE"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/text"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "layoutMode": {
+          "enum": [
+            "NONE",
+            "HORIZONTAL",
+            "VERTICAL"
+          ]
+        },
+        "clipsContent": {
+          "type": "boolean"
+        },
+        "characters": {
+          "type": "string"
+        },
+        "fontSize": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "imageHash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "scaleMode": {
+          "enum": [
+            "FIT",
+            "FILL"
+          ]
+        },
+        "fontFamily": {
+          "$ref": "#/$defs/text"
+        },
+        "fontStyle": {
+          "$ref": "#/$defs/text"
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9a-f]{6}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "FRAME"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "layoutMode",
+              "clipsContent"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "characters"
+                  ]
+                },
+                {
+                  "required": [
+                    "fontSize"
+                  ]
+                },
+                {
+                  "required": [
+                    "imageHash"
+                  ]
+                },
+                {
+                  "required": [
+                    "scaleMode"
+                  ]
+                },
+                {
+                  "required": [
+                    "fontFamily"
+                  ]
+                },
+                {
+                  "required": [
+                    "fontStyle"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "TEXT"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "characters",
+              "fontSize",
+              "fontFamily",
+              "fontStyle"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "layoutMode"
+                  ]
+                },
+                {
+                  "required": [
+                    "clipsContent"
+                  ]
+                },
+                {
+                  "required": [
+                    "imageHash"
+                  ]
+                },
+                {
+                  "required": [
+                    "scaleMode"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "IMAGE"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "imageHash",
+              "scaleMode"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "layoutMode"
+                  ]
+                },
+                {
+                  "required": [
+                    "clipsContent"
+                  ]
+                },
+                {
+                  "required": [
+                    "characters"
+                  ]
+                },
+                {
+                  "required": [
+                    "fontSize"
+                  ]
+                },
+                {
+                  "required": [
+                    "fontFamily"
+                  ]
+                },
+                {
+                  "required": [
+                    "fontStyle"
+                  ]
+                },
+                {
+                  "required": [
+                    "color"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
     "version": {
-      "type": "object", "required": ["major", "minor"], "additionalProperties": false,
-      "properties": {"major": {"const": 1}, "minor": {"type": "integer", "minimum": 0, "maximum": 2147483647}}
+      "type": "object",
+      "required": [
+        "major",
+        "minor"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "const": 1
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      }
     },
     "extensions": {
       "type": "object",
-      "propertyNames": {"pattern": "^[A-Za-z][A-Za-z0-9-]*(\\.[A-Za-z][A-Za-z0-9-]*)+$"},
-      "additionalProperties": {"type": "string", "minLength": 1}
+      "propertyNames": {
+        "pattern": "^[A-Za-z][A-Za-z0-9-]*(\\.[A-Za-z][A-Za-z0-9-]*)+$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
     },
-    "text": {"type": "string", "minLength": 1},
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
     "request": {
-      "type": "object", "required": ["schemaVersion", "operation"], "additionalProperties": false,
-      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "operation": {"$ref": "#/$defs/text"}, "extensions": {"$ref": "#/$defs/extensions"}}
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "operation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "operation": {
+          "$ref": "#/$defs/text"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
     },
     "snapshot": {
-      "type": "object", "required": ["schemaVersion", "snapshotId", "documentNamespace", "selectedRootIds", "nodes"], "additionalProperties": false,
-      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "snapshotId": {"$ref": "#/$defs/text"}, "documentNamespace": {"$ref": "#/$defs/text"}, "selectedRootIds": {"type": "array", "items": {"$ref": "#/$defs/text"}}, "nodes": {"type": "array", "maxItems": 0}, "extensions": {"$ref": "#/$defs/extensions"}}
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "snapshotId",
+        "documentNamespace",
+        "selectedRootIds",
+        "rootAliases",
+        "nodes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "snapshotId": {
+          "$ref": "#/$defs/text"
+        },
+        "documentNamespace": {
+          "$ref": "#/$defs/text"
+        },
+        "selectedRootIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        },
+        "rootAliases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "rootId",
+              "alias"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "rootId": {
+                "$ref": "#/$defs/text"
+              },
+              "alias": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        }
+      }
     },
     "catalog": {
-      "type": "object", "required": ["schemaVersion", "catalogId", "revision", "controls"], "additionalProperties": false,
-      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "catalogId": {"$ref": "#/$defs/text"}, "revision": {"$ref": "#/$defs/text"}, "controls": {"type": "array", "maxItems": 0}, "extensions": {"$ref": "#/$defs/extensions"}}
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "catalogId",
+        "revision",
+        "controls"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "catalogId": {
+          "$ref": "#/$defs/text"
+        },
+        "revision": {
+          "$ref": "#/$defs/text"
+        },
+        "controls": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
     },
     "diagnostic": {
-      "type": "object", "required": ["schemaVersion", "code", "severity", "message"], "additionalProperties": false,
-      "properties": {"schemaVersion": {"$ref": "#/$defs/version"}, "code": {"$ref": "#/$defs/text"}, "severity": {"enum": ["info", "warning", "error"]}, "message": {"$ref": "#/$defs/text"}, "extensions": {"$ref": "#/$defs/extensions"}}
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "code",
+        "severity",
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "code": {
+          "$ref": "#/$defs/text"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "$ref": "#/$defs/text"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
     }
   }
 }

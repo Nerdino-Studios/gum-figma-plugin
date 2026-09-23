@@ -7,6 +7,7 @@
     "types": ["@figma/plugin-typings"],
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": false
   },
   "include": ["src/index.ts", "src/document/**/*.ts", "src/transport/**/*.ts"]
