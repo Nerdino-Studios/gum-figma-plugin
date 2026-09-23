@@ -38,6 +38,6 @@ The script copies the native Gum project and destination `.csproj` marker into d
 |---|---|
 | macOS arm64 26.0 GumCli load, fonts, codegen, MonoGame DesktopGL screenshot | Executed here (PNG manually inspected); generated code compilation and editor GUI unrun |
 | Windows GumCli/font generation/native DLLs/MonoGame DesktopGL screenshot | **Unrun**; requires .NET 10 SDK, .NET 8 runtime, Arial or configured licensed font, working OpenGL/SDL environment; run the same smoke script in a Windows-compatible shell, inspect PNG and record results before claiming support |
-| Real Figma desktop plugin, loopback, interactive sample runtime | **Unrun / not implemented in T02** |
+| Figma Design desktop on macOS, GAM-208 shell | Owner observed a blank document displaying Selection, Mappings, Preview and changes, and Connection after importing a manually copied `manifest.json`; the original template filename was rejected (`Manifest must be named 'manifest.json'`). Client version was not recorded. Fresh import of a build-generated manifest, loopback communication and interactive sample runtime remain unrun/not implemented. |
 
 Upstream reference inspected: local Gum source documentation and `Tools/Gum.Cli/Commands/FontsCommand.cs` for supported commands and generator behavior. The source tree inspected was at `406fdff693ef2d7d1705d542c437837df38ba8f8`; executable compatibility was established against the pinned NuGet tool above, **not** by assuming that source checkout or the spec's `554ca3a8b1779b38b0c81f98848bd55cf48a69fe` commit has identical behavior.
