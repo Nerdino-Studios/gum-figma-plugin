@@ -9,7 +9,7 @@ PROJECTS = {
     "Contracts": set(),
     "Conversion": {"Contracts"},
     "Application": {"Contracts", "Conversion"},
-    "Infrastructure": {"Contracts", "Application"},
+    "Infrastructure": {"Contracts", "Application", "Conversion"},
     "Host": {"Application", "Infrastructure"},
 }
 CORE = ("Contracts", "Conversion")
