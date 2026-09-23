@@ -1,19 +1,51 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, symlink, writeFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('../', import.meta.url);
-test('development manifest and both build artifacts are loadable without an invented ID', async () => {
-  execFileSync(process.execPath, ['scripts/build.mjs'], { cwd: root });
-  const manifest = JSON.parse(await readFile(new URL('manifest.template.json', root), 'utf8'));
-  assert.deepEqual(manifest.editorType, ['figma']);
-  assert.equal(manifest.documentAccess, 'dynamic-page');
-  assert.equal(Object.hasOwn(manifest, 'id'), false);
-  const scene = await readFile(new URL(manifest.main, root), 'utf8');
-  const ui = await readFile(new URL(manifest.ui, root), 'utf8');
-  assert.match(scene, /showUI/);
-  assert.match(ui, /Selection/);
-  assert.match(ui, /Preview and changes/);
-  assert.doesNotMatch(ui, /UI_BUNDLE/);
+const root = fileURLToPath(new URL('../', import.meta.url));
+
+async function withPluginBuild(check) {
+  const dir = await mkdtemp(join(tmpdir(), 'gum-figma-manifest-'));
+  try {
+    for (const name of ['scripts', 'src', 'manifest.template.json']) {
+      await cp(join(root, name), join(dir, name), { recursive: true });
+    }
+    await symlink(join(root, 'node_modules'), join(dir, 'node_modules'), 'dir');
+    const build = () => execFileSync(process.execPath, ['scripts/build.mjs'], { cwd: dir });
+    await check(dir, build);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('fresh build generates a Figma-importable manifest basename and build artifacts without an invented ID', async () => {
+  await withPluginBuild(async (dir, build) => {
+    build();
+    const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
+    assert.deepEqual(manifest.editorType, ['figma']);
+    assert.equal(manifest.documentAccess, 'dynamic-page');
+    assert.equal(Object.hasOwn(manifest, 'id'), false);
+    assert.equal(manifest.main, 'dist/code.js');
+    assert.equal(manifest.ui, 'dist/ui.html');
+    const scene = await readFile(join(dir, manifest.main), 'utf8');
+    const ui = await readFile(join(dir, manifest.ui), 'utf8');
+    assert.match(scene, /showUI/);
+    assert.match(ui, /Selection/);
+    assert.match(ui, /Preview and changes/);
+    assert.doesNotMatch(ui, /UI_BUNDLE/);
+  });
+});
+
+test('rebuild preserves an existing local Figma-assigned manifest byte for byte', async () => {
+  await withPluginBuild(async (dir, build) => {
+    const local = '{"id":"figma-assigned-id","main":"dist/code.js","ui":"dist/ui.html"}\n';
+    await writeFile(join(dir, 'manifest.json'), local);
+    build();
+    build();
+    assert.equal(await readFile(join(dir, 'manifest.json'), 'utf8'), local);
+  });
 });
