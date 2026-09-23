@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScreenSave xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <Name>Preview</Name>
+  <State>
+    <Name>Default</Name>
+    <Variable><Type>float</Type><Name>Panel.Width</Name><Value xsi:type="xsd:float">360</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>float</Type><Name>Panel.Height</Name><Value xsi:type="xsd:float">180</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>float</Type><Name>Panel.X</Name><Value xsi:type="xsd:float">48</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>float</Type><Name>Panel.Y</Name><Value xsi:type="xsd:float">48</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>bool</Type><Name>Panel.IsFilled</Name><Value xsi:type="xsd:boolean">true</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>int</Type><Name>Panel.FillRed</Name><Value xsi:type="xsd:int">34</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>int</Type><Name>Panel.FillGreen</Name><Value xsi:type="xsd:int">96</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>int</Type><Name>Panel.FillBlue</Name><Value xsi:type="xsd:int">186</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>string</Type><Name>Title.Text</Name><Value xsi:type="xsd:string">Native Gum preview</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>string</Type><Name>Title.Font</Name><Value xsi:type="xsd:string">Arial</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>int</Type><Name>Title.FontSize</Name><Value xsi:type="xsd:int">24</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>float</Type><Name>Title.Width</Name><Value xsi:type="xsd:float">320</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>float</Type><Name>Title.X</Name><Value xsi:type="xsd:float">68</Value><SetsValue>true</SetsValue></Variable>
+    <Variable><Type>float</Type><Name>Title.Y</Name><Value xsi:type="xsd:float">96</Value><SetsValue>true</SetsValue></Variable>
+  </State>
+    <Instance><Name>Panel</Name><BaseType>Rectangle</BaseType></Instance>
+    <Instance><Name>Title</Name><BaseType>Text</BaseType></Instance>
+</ScreenSave>

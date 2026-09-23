@@ -2,7 +2,7 @@
 
 A visual Figma plugin and local C#/.NET 10 bridge for turning Figma designs into native Gum UI. External coding agents use MCP or a CLI to request deterministic conversion and connect the generated UI to application behavior.
 
-**Status: T01 skeleton only.** The approved contract and initial project/package scaffolding are checked in. The plugin has no runnable UI, the bridge has no executable host or conversion behavior, and the sample application has not been built. Gum toolchain and Figma runtime compatibility have not been verified.
+**Status: T01 skeleton + T02 minimal native Gum smoke sample.** The pinned GumCli can load, generate code/fonts and render the editable one-screen Gum project on the tested macOS arm64 host. The sample application is not runnable and generated C# has not been compiled. The plugin has no runnable UI and the bridge has no executable host or conversion behavior. Windows and Figma checks remain unrun. See [the compatibility record](docs/compatibility.md) for versions, commands and limits.
 
 ## Start here
 
@@ -26,7 +26,7 @@ npm ci --prefix apps/figma-plugin
 npm run typecheck --prefix apps/figma-plugin
 ```
 
-`dotnet test GumBridge.sln` currently discovers **no .NET test projects**; the executable architecture gate is the Python unittest command above. The pinned TypeScript and official Figma typings are only compilation dependencies, not evidence of a real Figma client test. SDK pins do not establish Gum tooling or native rendering compatibility; those checks start in the next ticket.
+`dotnet test GumBridge.sln` currently discovers **no .NET test projects**; the executable architecture gate is the Python unittest command above. The pinned TypeScript and official Figma typings are only compilation dependencies, not evidence of a real Figma client test. For the T02 native Gum smoke check, install .NET runtime 8 and run `dotnet tool restore` followed by `scripts/check-native-sample.sh` in a graphics-capable session. See [compatibility](docs/compatibility.md) for verified macOS results and unrun Windows checks.
 
 ## Architecture
 

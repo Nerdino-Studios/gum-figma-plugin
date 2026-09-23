@@ -20,3 +20,7 @@
 *.pem
 *.key
 .DS_Store
+# T02 GumCli outputs (machine-dependent fonts, generated code, and preview artifacts)
+samples/GumBridge.Sample/Content/GumProject/FontCache/
+samples/GumBridge.Sample/**/*Generated.cs
+samples/GumBridge.Sample/Screens/PreviewRuntime.cs
