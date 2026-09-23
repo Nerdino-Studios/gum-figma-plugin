@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Gum Bridge</title>
+  <style>
+    body { margin: 0; padding: 16px; font: 13px/1.5 system-ui, sans-serif; color: var(--figma-color-text, #222); background: var(--figma-color-bg, #fff); }
+    nav { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 14px 0; }
+    button { border: 1px solid var(--figma-color-border, #aaa); border-radius: 4px; padding: 9px; background: var(--figma-color-bg-secondary, #eee); color: inherit; cursor: pointer; }
+    button[aria-current="page"] { border-color: var(--figma-color-border-brand-strong, #485cf5); font-weight: bold; }
+    main { padding: 16px; border: 1px solid var(--figma-color-border, #aaa); border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Gum Bridge</h1>
+  <nav id="navigation" aria-label="Plugin views"></nav>
+  <main id="content" role="status" aria-live="polite"></main>
+  <script>/* UI_BUNDLE */</script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 A visual Figma plugin and local C#/.NET 10 bridge for turning Figma designs into native Gum UI. External coding agents use MCP or a CLI to request deterministic conversion and connect the generated UI to application behavior.
 
-**Status: T01 skeleton + T02 minimal native Gum smoke sample.** The pinned GumCli can load, generate code/fonts and render the editable one-screen Gum project on the tested macOS arm64 host. The sample application is not runnable and generated C# has not been compiled. The plugin has no runnable UI and the bridge has no executable host or conversion behavior. Windows and Figma checks remain unrun. See [the compatibility record](docs/compatibility.md) for versions, commands and limits.
+**Status: T01 skeleton + T02 minimal native Gum smoke sample + GAM-208 development plugin shell.** The pinned GumCli can load, generate code/fonts and render the editable one-screen Gum project on the tested macOS arm64 host. The sample application is not runnable and generated C# has not been compiled. The plugin now builds a scene entry and offline/empty iframe panel, but mapping/catalog, sample creation, preview, publication and bridge pairing are not implemented. The bridge has no executable host or conversion behavior. Real Figma desktop, Windows and plugin/bridge communication checks remain unrun. See [the compatibility record](docs/compatibility.md) for versions, commands and limits.
 
 ## Start here
 
@@ -27,6 +27,12 @@ npm run typecheck --prefix apps/figma-plugin
 ```
 
 `dotnet test GumBridge.sln` currently discovers **no .NET test projects**; the executable architecture gate is the Python unittest command above. The pinned TypeScript and official Figma typings are only compilation dependencies, not evidence of a real Figma client test. For the T02 native Gum smoke check, install .NET runtime 8 and run `dotnet tool restore` followed by `scripts/check-native-sample.sh` in a graphics-capable session. See [compatibility](docs/compatibility.md) for verified macOS results and unrun Windows checks.
+
+## Development plugin shell (GAM-208)
+
+Run `npm ci --prefix apps/figma-plugin`, `npm run typecheck --prefix apps/figma-plugin`, `npm run test --prefix apps/figma-plugin`, and `npm run build --prefix apps/figma-plugin`. In Figma Design desktop, use **Plugins → Development → Import plugin from manifest…** and choose `apps/figma-plugin/manifest.template.json` (which points to the generated `dist/` files). The template intentionally has **no universal plugin ID**. Figma assigns an ID during development import; retain your Figma-generated ID/manifest consistently for future local installations if you begin storing plugin data. Do not check a machine-specific ID or credentials into the shared template. Rebuild after edits and rerun the development plugin. A real desktop installation has **not** been checked in this environment.
+
+A blank document opens the four panel views without a game workspace or bridge. Selection names are read-only; mapping catalog/editor, sample creator, export, publication, previews and pairing are explicitly unavailable, not simulated successes. The built-in catalog and real offline mapping workflow belong to later tickets (GAM-218), not this shell.
 
 ## Architecture
 
