@@ -10,6 +10,7 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
     <ProjectReference Include="../../src/GumBridge.Contracts/GumBridge.Contracts.csproj" />
+    <ProjectReference Include="../../src/GumBridge.Host/GumBridge.Host.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="../../schemas/contract-vectors.json" Link="contract-vectors.json" CopyToOutputDirectory="PreserveNewest" />

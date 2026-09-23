@@ -27,6 +27,7 @@ test('fresh build generates a Figma-importable manifest basename and build artif
     build();
     const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
     assert.deepEqual(manifest.editorType, ['figma']);
+    assert.deepEqual(manifest.networkAccess, { allowedDomains: ['none'], devAllowedDomains: ['http://localhost:48931'] });
     assert.equal(manifest.documentAccess, 'dynamic-page');
     assert.equal(Object.hasOwn(manifest, 'id'), false);
     assert.equal(manifest.main, 'dist/code.js');
@@ -36,13 +37,31 @@ test('fresh build generates a Figma-importable manifest basename and build artif
     assert.match(scene, /showUI/);
     assert.match(ui, /Selection/);
     assert.match(ui, /Preview and changes/);
+    assert.match(ui, /Pair and request workspaces/);
+    assert.match(ui, /v1\/pair/);
+    assert.doesNotMatch(scene, /v1\/pair|Bearer /);
     assert.doesNotMatch(ui, /UI_BUNDLE/);
   });
 });
 
-test('rebuild preserves an existing local Figma-assigned manifest byte for byte', async () => {
+test('rebuild upgrades only the known stale loopback permission and preserves local ID', async () => {
   await withPluginBuild(async (dir, build) => {
-    const local = '{"id":"figma-assigned-id","main":"dist/code.js","ui":"dist/ui.html"}\n';
+    const previous = JSON.parse(await readFile(join(dir, 'manifest.template.json'), 'utf8'));
+    previous.id = 'figma-assigned-id';
+    previous.networkAccess.devAllowedDomains = ['http://127.0.0.1:48931'];
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(previous));
+    build();
+    const updated = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
+    assert.equal(updated.id, previous.id);
+    assert.deepEqual(updated.networkAccess, { allowedDomains: ['none'], devAllowedDomains: ['http://localhost:48931'] });
+  });
+});
+
+test('rebuild preserves an existing current local Figma-assigned manifest byte for byte', async () => {
+  await withPluginBuild(async (dir, build) => {
+    const current = JSON.parse(await readFile(join(dir, 'manifest.template.json'), 'utf8'));
+    current.id = 'figma-assigned-id';
+    const local = JSON.stringify(current) + '\n';
     await writeFile(join(dir, 'manifest.json'), local);
     build();
     build();
