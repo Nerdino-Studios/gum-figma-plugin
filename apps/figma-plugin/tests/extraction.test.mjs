@@ -353,3 +353,98 @@ test('responsive raster image blocks before a stretching Sprite can distort FIT/
     assert.ok(result.diagnostics.some(d => d.nodeId === 'image' && /aspect-ratio/.test(d.message)));
   }
 });
+
+
+test('decorative fallback needs exact node/feature approval and cannot rasterize text or containers', async () => {
+  const decoration = { id: 'deco', name: 'Deco', type: 'RECTANGLE', x: 0, y: 0, width: 1, height: 1, visible: true,
+    fills: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0 } }], effects: [{ type: 'DROP_SHADOW', radius: 4 }],
+    absoluteBoundingBox: { x: 0, y: 0, width: 1, height: 1 }, absoluteRenderBounds: { x: 0, y: 0, width: 1, height: 1 },
+    exportAsync: async () => Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC1sAAAAASUVORK5CYII=', 'base64')) };
+  const root = frame('root', 'Root', [decoration]);
+  root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 };
+  const api = { getImageByHash: () => null };
+  const blocked = await captureSelection([root], 'ns', api, {}, { root: 'Main' });
+  assert.equal(blocked.snapshot, null);
+  const diagnostic = blocked.diagnostics.find(d => d.nodeId === 'deco' && d.fingerprint);
+  assert.ok(diagnostic);
+  const approved = await captureSelection([root], 'ns', api, {}, { root: 'Main' }, [{ nodeId: 'deco', feature: diagnostic.property, fingerprint: diagnostic.fingerprint }]);
+  assert.deepEqual(approved.diagnostics, []);
+  assert.equal(approved.snapshot.nodes[1].type, 'IMAGE');
+  assert.equal(approved.snapshot.nodes[1].fallback.feature, diagnostic.property);
+  assert.equal(approved.snapshot.nodes[1].imageHash, approved.assets[0].hash);
+  assert.equal(validateContract('snapshot', approved.snapshot), true);
+  decoration.effects[0].radius = 5;
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, [{ nodeId: 'deco', feature: diagnostic.property, fingerprint: diagnostic.fingerprint }])).snapshot, null);
+  const label = text('label'); label.effects = [{ type: 'DROP_SHADOW' }];
+  assert.equal((await captureSelection([frame('root', 'Root', [label])], 'ns', api, {}, { root: 'Main' }, [{ nodeId: 'label', feature: diagnostic.property, fingerprint: diagnostic.fingerprint }])).snapshot, null);
+});
+
+test('fallback approval expires on stroke changes and never accepts interactive ancestry', async () => {
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aC1sAAAAASUVORK5CYII=', 'base64'));
+  const decoration = { id: 'deco', name: 'Decoration', type: 'RECTANGLE', x: 0, y: 0, width: 1, height: 1, visible: true,
+    fills: [], strokes: [{ type: 'SOLID' }], strokeWeight: 1, absoluteBoundingBox: { x: 0, y: 0, width: 1, height: 1 },
+    absoluteRenderBounds: { x: 0, y: 0, width: 1, height: 1 }, exportAsync: async () => png };
+  const root = frame('root', 'Root', [decoration]);
+  root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 };
+  const api = { getImageByHash: () => null };
+  const first = await captureSelection([root], 'ns', api, {}, { root: 'Main' });
+  const d = first.diagnostics.find(item => item.nodeId === 'deco' && item.fingerprint);
+  assert.ok(d);
+  const approval = [{ nodeId: 'deco', feature: d.property, fingerprint: d.fingerprint }];
+  assert.ok((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot);
+  decoration.strokeWeight = 20;
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+  decoration.strokeWeight = 1;
+  decoration.strokeJoin = 'MITER';
+  const joinApproval = (await captureSelection([root], 'ns', api, {}, { root: 'Main' })).diagnostics.find(item => item.nodeId === 'deco').fingerprint;
+  decoration.strokeJoin = 'ROUND';
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, [{ nodeId: 'deco', feature: 'effects/strokes', fingerprint: joinApproval }])).snapshot, null);
+  delete decoration.strokeJoin;
+  decoration.reactions = [{ trigger: { type: 'ON_CLICK' }, action: { type: 'URL' } }];
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+  delete decoration.reactions;
+  root.reactions = [{ trigger: { type: 'ON_CLICK' } }];
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+});
+
+test('gradient fallback approval expires on stop/transform edits and mid-export changes', async () => {
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64'));
+  const gradient = { type: 'GRADIENT_LINEAR', gradientStops: [{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } }],
+    gradientTransform: [[1, 0, 0], [0, 1, 0]] };
+  const leaf = { id: 'deco', name: 'Gradient', type: 'RECTANGLE', x: 0, y: 0, width: 1, height: 1, visible: true,
+    fills: [gradient], effects: [{ type: 'DROP_SHADOW' }], absoluteBoundingBox: { x: 0, y: 0, width: 1, height: 1 },
+    absoluteRenderBounds: { x: 0, y: 0, width: 1, height: 1 }, exportAsync: async () => png };
+  const root = frame('root', 'Root', [leaf]); root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 };
+  const api = { getImageByHash: () => null };
+  const diagnostic = (await captureSelection([root], 'ns', api, {}, { root: 'Main' })).diagnostics.find(d => d.nodeId === 'deco');
+  const approval = [{ nodeId: 'deco', feature: diagnostic.property, fingerprint: diagnostic.fingerprint }];
+  assert.ok((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot);
+  gradient.gradientStops[0].color.b = 1;
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+  gradient.gradientStops[0].color.b = 0;
+  gradient.gradientTransform[0][2] = 0.2;
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+  gradient.gradientTransform[0][2] = 0;
+  leaf.exportAsync = async () => { gradient.gradientStops[0].color.b = 1; return png; };
+  const changed = await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval);
+  assert.equal(changed.snapshot, null);
+  assert.ok(changed.diagnostics.some(d => d.code === 'SOURCE_CHANGED_DURING_CAPTURE'));
+});
+
+test('fallback captures exact unrotated raster bounds or blocks unknown geometry', async () => {
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAABCAYAAAD5PA/NAAAAD0lEQVR4nGP4z8DwHxkDAEPNB/lfEPxcAAAAAElFTkSuQmCC', 'base64'));
+  const leaf = { id: 'deco', name: 'Shadow', type: 'RECTANGLE', x: 10, y: 20, width: 1, height: 1, visible: true,
+    fills: [], effects: [{ type: 'DROP_SHADOW' }], absoluteBoundingBox: { x: 10, y: 20, width: 1, height: 1 },
+    absoluteRenderBounds: { x: 9, y: 20, width: 4, height: 1 }, exportAsync: async () => png };
+  const root = frame('root', 'Root', [leaf]); root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 }; const api = { getImageByHash: () => null };
+  const blocked = await captureSelection([root], 'ns', api, {}, { root: 'Main' });
+  const d = blocked.diagnostics.find(item => item.nodeId === 'deco' && item.fingerprint);
+  const approved = await captureSelection([root], 'ns', api, {}, { root: 'Main' }, [{ nodeId: 'deco', feature: d.property, fingerprint: d.fingerprint }]);
+  assert.ok(approved.snapshot);
+  assert.equal(approved.snapshot.nodes[1].x, 9); assert.equal(approved.snapshot.nodes[1].width, 4);
+  leaf.rotation = 15;
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' })).snapshot, null);
+  leaf.rotation = 0;
+  delete leaf.absoluteRenderBounds;
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' })).snapshot, null);
+});

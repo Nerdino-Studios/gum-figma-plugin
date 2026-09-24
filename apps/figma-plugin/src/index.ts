@@ -1,6 +1,6 @@
 import { retainedNamespace, associateNamespace } from './document/namespace.ts';
 import { readSelection } from './document/selection.ts';
-import { captureCurrentSelection } from './document/extraction.ts';
+import { captureCurrentSelection, captureSelection, type SourceNode } from './document/extraction.ts';
 
 figma.showUI(__html__, { width: 420, height: 560, themeColors: true });
 figma.ui.postMessage(readSelection());
@@ -14,6 +14,16 @@ try {
     : 'Plugin metadata is unavailable. Check your development plugin ID and reimport the local manifest.' });
 }
 let associated: string | null = null;
+type FallbackApproval = { nodeId: string; feature: string; fingerprint: string };
+const approvalKey = 'decorativeFallbackApprovalsV1';
+function approvals(): FallbackApproval[] {
+  try {
+    const value: unknown = JSON.parse(figma.root.getPluginData(approvalKey) || '[]');
+    return Array.isArray(value) ? value.filter((entry): entry is FallbackApproval =>
+      typeof entry === 'object' && entry !== null && typeof entry.nodeId === 'string' &&
+      entry.feature === 'effects/strokes' && typeof entry.fingerprint === 'string' && /^sha256:[0-9a-f]{64}$/.test(entry.fingerprint)) : [];
+  } catch { return []; }
+}
 figma.on('selectionchange', () => figma.ui.postMessage(readSelection()));
 let observedPage = figma.currentPage;
 const onNodeChange = () => figma.ui.postMessage({ type: 'source-changed' });
@@ -39,6 +49,22 @@ figma.ui.onmessage = async (message: unknown) => {
     }
     return;
   }
+  if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'approve-decorative-fallback' &&
+      'nodeId' in message && typeof message.nodeId === 'string' && 'fingerprint' in message && typeof message.fingerprint === 'string') {
+    try {
+      if (!metadataAvailable || !associated || retainedNamespace(figma.root) !== associated) throw new Error('Associate this design before approving fallback');
+      const selected = figma.currentPage.selection;
+      if (selected.length !== 1) throw new Error('Select one export root');
+      const current = await captureCurrentSelection(associated, { [selected[0].id]: 'Review' });
+      if (!current.diagnostics.some(d => d.nodeId === message.nodeId && d.property === 'effects/strokes' && d.fingerprint === message.fingerprint))
+        throw new Error('Source changed; capture again before approving');
+      const next = [...approvals().filter(a => a.nodeId !== message.nodeId),
+        { nodeId: message.nodeId, feature: 'effects/strokes', fingerprint: message.fingerprint }];
+      figma.root.setPluginData(approvalKey, JSON.stringify(next));
+      figma.ui.postMessage({ type: 'fallback-approved', nodeId: message.nodeId });
+    } catch (error) { figma.ui.postMessage({ type: 'fallback-error', message: error instanceof Error ? error.message : 'Approval failed' }); }
+    return;
+  }
   if (typeof message !== 'object' || message === null || !('type' in message) || message.type !== 'capture-publication' ||
       !('namespace' in message) || typeof message.namespace !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(message.namespace) ||
       !('alias' in message) || typeof message.alias !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(message.alias)) return;
@@ -48,7 +74,7 @@ figma.ui.onmessage = async (message: unknown) => {
       throw new Error('Choose New design namespace or Continue known design before capture');
     const selected = figma.currentPage.selection;
     const aliases = selected.length === 1 ? { [selected[0].id]: message.alias } : {};
-    const result = await captureCurrentSelection(message.namespace, aliases);
+    const result = await captureSelection(figma.currentPage.selection as unknown as SourceNode[], message.namespace, figma, {}, aliases, approvals());
     figma.ui.postMessage({ type: 'capture-result', result });
   } catch (error) {
     figma.ui.postMessage({ type: 'capture-result', result: { snapshot: null, assets: [], diagnostics: [

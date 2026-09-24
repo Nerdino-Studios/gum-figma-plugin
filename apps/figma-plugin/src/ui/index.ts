@@ -42,6 +42,7 @@ let sourceRevision = 0;
 let captureRevision = 0;
 let captureWorkspace: string | undefined;
 let publishedStale = false;
+let fallbackCandidate: { nodeId: string; fingerprint: string; message: string } | undefined;
 
 const panel = initialPanel();
 let active: ViewKey = 'selection';
@@ -60,6 +61,17 @@ function render(): void {
   }
   content.textContent = setupRequired ? publicationStatus : active === 'connection' ? connectionStatus : active === 'preview' ? publicationStatus : panel[active];
   if (setupRequired) return;
+  if (active === 'preview' && fallbackCandidate) {
+    const approval = document.createElement('button');
+    approval.textContent = `Approve decorative PNG fallback for ${fallbackCandidate.nodeId} (loses editability and resolution independence)`;
+    approval.addEventListener('click', () => {
+      if (!fallbackCandidate) return;
+      parent.postMessage({ pluginMessage: { type: 'approve-decorative-fallback', nodeId: fallbackCandidate.nodeId, fingerprint: fallbackCandidate.fingerprint } }, '*');
+      fallbackCandidate = undefined;
+      publicationStatus = 'Checking scoped fallback approval…'; render();
+    });
+    content.append(approval);
+  }
   if (active === 'preview' && previewUrl) {
     const identity = document.createElement('p');
     identity.textContent = `${stale ? 'Stale — source or workspace changed. ' : ''}${previewIdentity}`;
@@ -203,13 +215,17 @@ window.addEventListener('message', event => {
     if (message.type === 'namespace-associated' && 'namespace' in message && typeof message.namespace === 'string') {
       namespace = message.namespace; retained = namespace; associated = true; render(); return;
     }
+    if (message.type === 'fallback-approved') { publicationStatus = 'Decorative fallback approved for this exact node and feature. Capture again to publish.'; render(); return; }
+    if (message.type === 'fallback-error' && 'message' in message) { publicationStatus = `Fallback not approved: ${String(message.message)}`; render(); return; }
     if (message.type === 'namespace-error' && 'message' in message) {
       publicationStatus = `Unpublished: ${String(message.message)}`; render(); return;
     }
   }
   if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'capture-result' &&
       'result' in message && typeof message.result === 'object' && message.result !== null && 'snapshot' in message.result && 'diagnostics' in message.result) {
-    const result = message.result as { snapshot: { snapshotId: string; schemaVersion: { major: 1; minor: 0 } } | null; assets: { hash: string; bytes: Uint8Array }[]; diagnostics: { code: string; message: string }[] };
+    const result = message.result as { snapshot: { snapshotId: string; schemaVersion: { major: 1; minor: 0 } } | null; assets: { hash: string; bytes: Uint8Array }[]; diagnostics: { code: string; message: string; nodeId?: string; fingerprint?: string; property?: string }[] };
+    fallbackCandidate = result.diagnostics.find((d): d is { code: string; message: string; nodeId: string; fingerprint: string; property: string } =>
+      d.property === 'effects/strokes' && !!d.fingerprint && !!d.nodeId && d.message.startsWith('Decorative raster fallback'));
     const requestedWorkspace = captureWorkspace;
     captureWorkspace = undefined;
     if (!result.snapshot || result.diagnostics.length || !requestedWorkspace || workspaceId !== requestedWorkspace) {

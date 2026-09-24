@@ -42,7 +42,7 @@ public static class WireContracts
                 TextArray(value.GetProperty("selectedRootIds")) && ValidAliases(value.GetProperty("rootAliases"), value.GetProperty("selectedRootIds")) && NodeArray(value.GetProperty("nodes")) &&
                 (version.GetProperty("minor").GetInt32() >= 1 || !value.GetProperty("nodes").EnumerateArray().Any(HasResponsiveFields)) &&
                 (version.GetProperty("minor").GetInt32() >= 2 || !value.GetProperty("nodes").EnumerateArray().Any(HasLayoutFields)) &&
-                (version.GetProperty("minor").GetInt32() >= 3 || !value.GetProperty("nodes").EnumerateArray().Any(n => n.TryGetProperty("rotation", out _) || n.TryGetProperty("imageTransform", out _))),
+                (version.GetProperty("minor").GetInt32() >= 3 || !value.GetProperty("nodes").EnumerateArray().Any(n => n.TryGetProperty("rotation", out _) || n.TryGetProperty("imageTransform", out _) || n.TryGetProperty("fallback", out _))),
             "catalog" => Text(value.GetProperty("catalogId")) && Text(value.GetProperty("revision")) &&
                 EmptyArray(value.GetProperty("controls")),
             "diagnostic" => Text(value.GetProperty("code")) && Text(value.GetProperty("message")) &&
@@ -78,7 +78,7 @@ public static class WireContracts
     {
         if (node.ValueKind != JsonValueKind.Object) return false;
         string[] required = ["id", "parentId", "type", "name", "x", "y", "width", "height", "visible"];
-        string[] optional = ["layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "imageHash", "scaleMode", "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems", "layoutAlign", "rotation", "imageTransform"];
+        string[] optional = ["layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "imageHash", "scaleMode", "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems", "layoutAlign", "rotation", "imageTransform", "fallback"];
         if (!required.All(key => node.TryGetProperty(key, out _)) ||
             node.EnumerateObject().Any(p => !required.Contains(p.Name) && !optional.Contains(p.Name)) ||
             !Text(node.GetProperty("id")) || !Text(node.GetProperty("name")) ||
@@ -94,6 +94,11 @@ public static class WireContracts
             (transform.ValueKind != JsonValueKind.Array || transform.GetArrayLength() != 2 || transform.EnumerateArray().Any(row =>
                 row.ValueKind != JsonValueKind.Array || row.GetArrayLength() != 3 || row.EnumerateArray().Any(value =>
                     value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var n) || !double.IsFinite(n))))) return false;
+        if (node.TryGetProperty("fallback", out var fallback) &&
+            (node.GetProperty("type").GetString() != "IMAGE" || fallback.ValueKind != JsonValueKind.Object || fallback.EnumerateObject().Count() != 2 ||
+             !fallback.TryGetProperty("feature", out var feature) || feature.ValueKind != JsonValueKind.String || feature.GetString() != "effects/strokes" ||
+             !fallback.TryGetProperty("fingerprint", out var fingerprint) || fingerprint.ValueKind != JsonValueKind.String ||
+             !Regex.IsMatch(fingerprint.GetString()!, @"^sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant))) return false;
         if (node.TryGetProperty("rotation", out var rotation) && (rotation.ValueKind != JsonValueKind.Number || !rotation.TryGetDouble(out var angle) || !double.IsFinite(angle))) return false;
         foreach (var key in new[] { "minWidth", "maxWidth", "minHeight", "maxHeight" })
             if (node.TryGetProperty(key, out var value) && (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var n) || !double.IsFinite(n) || n < 0)) return false;

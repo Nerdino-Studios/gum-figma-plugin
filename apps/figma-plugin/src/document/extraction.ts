@@ -6,10 +6,16 @@ import { encodeUtf8 } from './utf8.ts';
 export interface SourceNode {
   id: string; name: string; type: string; x: number; y: number; width: number; height: number; visible: boolean;
   children?: readonly SourceNode[]; layoutMode?: string; clipsContent?: boolean;
+  exportAsync?: (settings: { format: 'PNG'; constraint: { type: 'SCALE'; value: 1 } }) => Promise<Uint8Array>;
+  absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null;
+  absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null;
+  reactions?: readonly unknown[]; strokeWeight?: number; strokeAlign?: string;
+  strokeTopWeight?: number; strokeRightWeight?: number; strokeBottomWeight?: number; strokeLeftWeight?: number;
+  dashPattern?: readonly number[]; strokeDashes?: readonly number[]; strokeJoin?: string; strokeCap?: string; strokeMiterLimit?: number;
   cornerRadius?: number | symbol; rectangleCornerRadii?: readonly number[]; isMask?: boolean; blendMode?: string;
   textAlignHorizontal?: string; textAlignVertical?: string; lineHeight?: unknown; letterSpacing?: unknown;
   textCase?: string; textDecoration?: string; paragraphSpacing?: number; textAutoResize?: string;
-  textTruncation?: string; maxLines?: number; fontWeight?: number; textStyleId?: string; fillStyleId?: string;
+  textTruncation?: string; maxLines?: number; fontWeight?: number; textStyleId?: string; fillStyleId?: string; strokeStyleId?: string; effectStyleId?: string;
   boundVariables?: unknown;
   characters?: string; fontSize?: number | symbol; fills?: readonly { type: string; imageHash?: string; scaleMode?: string; color?: { r: number; g: number; b: number }; opacity?: number; visible?: boolean; imageTransform?: unknown; rotation?: number; filters?: Readonly<Record<string, number>>; blendMode?: string; boundVariables?: unknown }[] | symbol;
   fontName?: unknown; effects?: readonly unknown[]; strokes?: readonly unknown[];
@@ -24,6 +30,7 @@ export interface DesignNode {
   x: number; y: number; width: number; height: number; visible: boolean;
   layoutMode?: string; clipsContent?: boolean; characters?: string; fontSize?: number; fontFamily?: string; fontStyle?: string; color?: string; imageHash?: string; scaleMode?: string;
   imageTransform?: readonly (readonly number[])[];
+  fallback?: { feature: string; fingerprint: string };
   horizontalSizing?: 'FILL' | 'HUG'; verticalSizing?: 'FILL' | 'HUG'; horizontalAnchor?: 'MAX' | 'CENTER' | 'STRETCH'; verticalAnchor?: 'MAX' | 'CENTER' | 'STRETCH';
   minWidth?: number; maxWidth?: number; minHeight?: number; maxHeight?: number;
   itemSpacing?: number; paddingLeft?: number; paddingRight?: number; paddingTop?: number; paddingBottom?: number;
@@ -55,6 +62,7 @@ export async function captureSelection(
   selection: readonly SourceNode[], documentNamespace: string,
   images: { getImageByHash(hash: string): { getBytesAsync(): Promise<Uint8Array> } | null },
   budget: Partial<typeof limits> = {}, aliases: Readonly<Record<string, string>> = {},
+  approvals: readonly { nodeId: string; feature: string; fingerprint: string }[] = [],
 ) {
   if (!documentNamespace || /[/\\]/.test(documentNamespace)) throw new Error('Document namespace must be a path-free identity');
   const bound = { ...limits, ...budget };
@@ -69,6 +77,7 @@ export async function captureSelection(
   const nodes: DesignNode[] = [];
   const assets: { hash: string; bytes: Uint8Array }[] = [];
   const pending: { node: DesignNode; sourceHash: string }[] = [];
+  const fallbackExports: { node: DesignNode; source: SourceNode }[] = [];
   const selected = selection.filter(root => root.type === 'FRAME').sort((a, b) => a.id.localeCompare(b.id));
   const observed: { node: SourceNode; fingerprint: string; childIds?: string[]; childCount?: number }[] = [];
   const mixed = (value: unknown) => typeof value === 'symbol' ? 'MIXED' : value ?? null;
@@ -77,11 +86,19 @@ export async function captureSelection(
     layoutMode: node.layoutMode ?? null, clipsContent: node.clipsContent ?? null, characters: node.characters ?? null,
     fontSize: typeof node.fontSize === 'symbol' ? 'MIXED' : node.fontSize ?? null,
     fontName: typeof node.fontName === 'symbol' ? 'MIXED' : node.fontName ?? null,
-    fills: typeof node.fills === 'symbol' ? 'MIXED' : (node.fills ?? []).map(p => ({ type: p.type, imageHash: p.imageHash ?? null,
-      scaleMode: p.scaleMode ?? null, color: p.color ?? null, opacity: p.opacity ?? null, visible: p.visible ?? null,
-      imageTransform: p.imageTransform ?? null, rotation: p.rotation ?? null, filters: p.filters ?? null,
-      blendMode: p.blendMode ?? null, boundVariables: p.boundVariables ?? null })),
-    effects: node.effects?.length ?? 0, strokes: node.strokes?.length ?? 0,
+    // Hash the complete Figma paint data: gradients and future paint fields affect raster output.
+    // Exclude absent optional properties, not material stop/color/transform values.
+    fills: typeof node.fills === 'symbol' ? 'MIXED' : (node.fills ?? []).map(p =>
+      Object.fromEntries(Object.entries(p).filter(([, value]) => value !== undefined))),
+    effects: node.effects ?? [], strokes: node.strokes ?? [], strokeWeight: node.strokeWeight ?? null,
+    strokeAlign: node.strokeAlign ?? null, strokeTopWeight: node.strokeTopWeight ?? null,
+    strokeRightWeight: node.strokeRightWeight ?? null, strokeBottomWeight: node.strokeBottomWeight ?? null,
+    strokeLeftWeight: node.strokeLeftWeight ?? null, dashPattern: node.dashPattern ?? null,
+    strokeDashes: node.strokeDashes ?? null, strokeJoin: node.strokeJoin ?? null,
+    strokeCap: node.strokeCap ?? null, strokeMiterLimit: node.strokeMiterLimit ?? null,
+    strokeStyleId: node.strokeStyleId ?? null, effectStyleId: node.effectStyleId ?? null,
+    reactions: node.reactions ?? null, absoluteBoundingBox: node.absoluteBoundingBox ?? null,
+    absoluteRenderBounds: node.absoluteRenderBounds ?? null,
     itemSpacing: node.itemSpacing ?? null, paddingLeft: node.paddingLeft ?? null, paddingRight: node.paddingRight ?? null,
     paddingTop: node.paddingTop ?? null, paddingBottom: node.paddingBottom ?? null,
     counterAxisAlignItems: node.counterAxisAlignItems ?? null, primaryAxisAlignItems: node.primaryAxisAlignItems ?? null,
@@ -103,13 +120,31 @@ export async function captureSelection(
   function fail(node: SourceNode, property: string, message: string, code = 'UNSUPPORTED_FEATURE') {
     diagnostics.push({ code, severity: 'error', nodeId: node.id, property, message });
   }
-  function visit(node: SourceNode, parentId: string | null, depth: number, parent?: SourceNode) {
+  function visit(node: SourceNode, parentId: string | null, depth: number, parent?: SourceNode, interactiveAncestor = false, rotatedAncestor = false) {
     if (depth > bound.maxDepth || nodes.length >= bound.maxNodes) { fail(node, 'children', 'Capture depth/node budget exceeded'); return; }
     const observation: (typeof observed)[number] = { node, fingerprint: hash(propertySnapshot(node)) };
     observed.push(observation);
     if (!node.id || !node.name) { fail(node, 'identity', 'Source ID and display name are required'); return; }
     if (!['FRAME', 'TEXT', 'RECTANGLE'].includes(node.type)) { fail(node, 'type', `Unsupported node: ${node.type}`); return; }
-    if ((node.effects?.length ?? 0) > 0 || (node.strokes?.length ?? 0) > 0) fail(node, 'effects/strokes', 'Effects and strokes are not supported');
+    const needsFallback = (node.effects?.length ?? 0) > 0 || (node.strokes?.length ?? 0) > 0;
+    const fingerprint = needsFallback ? hash({ namespace: documentNamespace, node: propertySnapshot(node), feature: 'effects/strokes' }) : '';
+    const decorative = node.type === 'RECTANGLE' && parentId !== null && !(node.children?.length) &&
+      !interactiveAncestor && !(node.reactions?.length) && !rotatedAncestor && !node.rotation && parent?.layoutMode === 'NONE';
+    const box = node.absoluteBoundingBox;
+    const render = node.absoluteRenderBounds;
+    const bounded = box && render && [box.x, box.y, box.width, box.height, render.x, render.y, render.width, render.height].every(Number.isFinite) &&
+      render.width > 0 && render.height > 0 && Number.isInteger(render.width) && Number.isInteger(render.height) &&
+      render.width <= 4096 && render.height <= 4096 && render.width * render.height <= 4194304 &&
+      !!parent?.absoluteBoundingBox && Math.abs(box.x - node.x - parent.absoluteBoundingBox.x) < 1e-6 &&
+      Math.abs(box.y - node.y - parent.absoluteBoundingBox.y) < 1e-6 &&
+      Math.abs(box.width - node.width) < 1e-6 && Math.abs(box.height - node.height) < 1e-6;
+    const eligible = decorative && !!bounded;
+    const approved = needsFallback && eligible &&
+      approvals.some(entry => entry.nodeId === node.id && entry.feature === 'effects/strokes' && entry.fingerprint === fingerprint);
+    if (needsFallback && !approved) diagnostics.push({ code: 'UNSUPPORTED_FEATURE', severity: 'error', nodeId: node.id,
+      property: 'effects/strokes', ...(eligible ? { fingerprint } : {}), message: eligible
+        ? 'Decorative raster fallback: loses editability and resolution independence. Approve this exact node/feature to export PNG.'
+        : 'Effects and strokes on interactive content or unverifiable raster geometry cannot be rasterized.' });
     const rotated = node.rotation !== undefined && node.rotation !== 0;
     if (rotated && (node.type === 'TEXT' || node.type === 'FRAME' && (node.children?.length ?? 0) > 0 || parentId === null))
       fail(node, 'rotation', 'Rotated text or interactive container has unverified hit-test geometry');
@@ -132,6 +167,7 @@ export async function captureSelection(
     if (node.blendMode && node.blendMode !== 'PASS_THROUGH' && node.blendMode !== 'NORMAL') fail(node, 'blendMode', 'Blend mode is not captured');
     if (node.boundVariables && Object.keys(node.boundVariables).length) fail(node, 'boundVariables', 'Variables are not resolved');
     if (node.fillStyleId) fail(node, 'fillStyleId', 'Paint style provenance is not captured');
+    if (node.strokeStyleId || node.effectStyleId) fail(node, 'styleId', 'Stroke/effect style provenance is not captured');
     if (node.type === 'TEXT') {
       const unsupportedText: [string, unknown, unknown][] = [
         ['textAlignHorizontal', node.textAlignHorizontal, 'LEFT'], ['textAlignVertical', node.textAlignVertical, 'TOP'],
@@ -208,23 +244,23 @@ export async function captureSelection(
         fail(node, 'fills', 'Paint opacity, visibility, blend or variables are not captured');
       }
     }
-    if (fill.length > 1 || fill.some(p => p.type !== (node.type === 'RECTANGLE' ? 'IMAGE' : 'SOLID'))) fail(node, 'fills', 'Only one solid frame/text fill or raster image is supported');
+    if (!approved && (fill.length > 1 || fill.some(p => p.type !== (node.type === 'RECTANGLE' ? 'IMAGE' : 'SOLID')))) fail(node, 'fills', 'Only one solid frame/text fill or raster image is supported');
     const solid = node.type !== 'RECTANGLE' ? fill[0] : undefined;
     if (solid && (solid.visible === false || solid.opacity !== undefined && solid.opacity !== 1 ||
       !solid.color || ![solid.color.r, solid.color.g, solid.color.b].every(v => Number.isFinite(v) && v >= 0 && v <= 1))) {
       fail(node, 'fills', 'Solid fill must have opaque finite RGB');
     }
-    if (node.type === 'RECTANGLE' && (fill.length !== 1 || fill[0].type !== 'IMAGE' || !fill[0].imageHash || !['FIT', 'FILL', 'CROP'].includes(fill[0].scaleMode ?? ''))) {
+    if (node.type === 'RECTANGLE' && !approved && (fill.length !== 1 || fill[0].type !== 'IMAGE' || !fill[0].imageHash || !['FIT', 'FILL', 'CROP'].includes(fill[0].scaleMode ?? ''))) {
       fail(node, 'fills', 'Rectangle requires a FIT/FILL raster image'); return;
     }
     if (node.type === 'RECTANGLE' && (node.constraints?.horizontal === 'STRETCH' || node.constraints?.vertical === 'STRETCH' ||
       ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => node[key as keyof SourceNode] != null)))
       fail(node, 'constraints', 'Responsive image dimensions and limits require verified FIT/FILL aspect-ratio rendering');
-    if (node.type === 'RECTANGLE' && fill[0]?.scaleMode === 'CROP') {
+    if (node.type === 'RECTANGLE' && !approved && fill[0]?.scaleMode === 'CROP') {
       const matrix = fill[0].imageTransform;
       if (!Array.isArray(matrix) || matrix.length !== 2 || !matrix.every(row => Array.isArray(row) && row.length === 3 && row.every(Number.isFinite)))
         fail(node, 'fills.imageTransform', 'CROP requires a finite 2x3 image transform');
-    } else if (node.type === 'RECTANGLE' && fill[0]?.imageTransform)
+    } else if (node.type === 'RECTANGLE' && !approved && fill[0]?.imageTransform)
       fail(node, 'fills.imageTransform', 'Only CROP may specify an image transform');
     if (node.type === 'TEXT' && (typeof node.fontSize !== 'number' || !Number.isFinite(node.fontSize) || node.fontSize <= 0 || typeof node.characters !== 'string' || !(typeof node.fontName === 'object' && node.fontName !== null && 'family' in node.fontName && 'style' in node.fontName && typeof node.fontName.family === 'string' && typeof node.fontName.style === 'string')))  {
       fail(node, 'text', 'Text requires uniform style and characters'); return;
@@ -234,8 +270,11 @@ export async function captureSelection(
       ? `#${[solid.color.r, solid.color.g, solid.color.b].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('')}` : undefined;
     const output: DesignNode = {
       id: node.id, parentId, type: node.type === 'RECTANGLE' ? 'IMAGE' : node.type as 'FRAME' | 'TEXT', name: node.name,
-      x: node.x, y: node.y, width: node.width, height: node.height, visible: node.visible,
-      ...(color ? { color } : {}),
+      x: approved ? node.x + render!.x - box!.x : node.x,
+      y: approved ? node.y + render!.y - box!.y : node.y,
+      width: approved ? render!.width : node.width,
+      height: approved ? render!.height : node.height, visible: node.visible,
+      ...(color && !approved ? { color } : {}),
       ...(node.type === 'FRAME' ? { layoutMode: node.layoutMode ?? 'NONE', clipsContent: node.clipsContent ?? false } : {}),
       ...(node.layoutSizingHorizontal === 'HUG' ? { horizontalSizing: 'HUG' as const } :
         node.layoutSizingHorizontal === 'FILL' || node.constraints?.horizontal === 'STRETCH' ||
@@ -257,11 +296,13 @@ export async function captureSelection(
         { layoutAlign: node.layoutAlign as 'MIN' | 'CENTER' | 'MAX' } : {}),
       ...(rotated && Number.isFinite(node.rotation) ? { rotation: node.rotation } : {}),
       ...(node.type === 'TEXT' ? { characters: node.characters!, fontSize: node.fontSize as number, fontFamily: (node.fontName as { family: string }).family, fontStyle: (node.fontName as { style: string }).style } : {}),
-      ...(node.type === 'RECTANGLE' && fill[0]?.imageHash ? { scaleMode: fill[0].scaleMode,
+      ...(approved ? { scaleMode: 'FIT', fallback: { feature: 'effects/strokes', fingerprint } } : {}),
+      ...(node.type === 'RECTANGLE' && !approved && fill[0]?.imageHash ? { scaleMode: fill[0].scaleMode,
         ...(fill[0].scaleMode === 'CROP' && Array.isArray(fill[0].imageTransform) ? { imageTransform: fill[0].imageTransform as readonly (readonly number[])[] } : {}) } : {}),
     };
     nodes.push(output);
-    if (node.type === 'RECTANGLE' && fill[0]?.imageHash) pending.push({ node: output, sourceHash: fill[0].imageHash });
+    if (approved) fallbackExports.push({ node: output, source: node });
+    else if (node.type === 'RECTANGLE' && fill[0]?.imageHash) pending.push({ node: output, sourceHash: fill[0].imageHash });
     // At the boundary, do not even touch the children getter. Block conservatively.
     if (depth >= bound.maxDepth || nodes.length >= bound.maxNodes) {
       fail(node, 'children', 'Capture stopped at depth/node budget'); return;
@@ -274,9 +315,24 @@ export async function captureSelection(
       fail(node, 'children', 'Capture stopped at node budget'); return;
     }
     observation.childIds = children.map(child => child.id);
-    for (const child of children) visit(child, node.id, depth + 1, node);
+    for (const child of children) visit(child, node.id, depth + 1, node,
+      interactiveAncestor || !!node.reactions?.length, rotatedAncestor || !!node.rotation);
   }
   for (const root of selected) visit(root, null, 0);
+  for (const item of fallbackExports) {
+    try {
+      if (!item.source.exportAsync) throw new Error('Figma PNG export unavailable');
+      const bytes = await item.source.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+      if (bytes.length < 24 || bytes.length > bound.maxAssetBytes ||
+        ![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte) ||
+        new DataView(bytes.buffer, bytes.byteOffset).getUint32(16) !== item.node.width ||
+        new DataView(bytes.buffer, bytes.byteOffset).getUint32(20) !== item.node.height)
+        throw new Error('Fallback PNG does not match bounded render geometry');
+      item.node.imageHash = hashBytes(bytes);
+      if (!assets.some(asset => asset.hash === item.node.imageHash)) assets.push({ hash: item.node.imageHash, bytes });
+    } catch (error) { diagnostics.push({ code: 'UNRESOLVED_ASSET', severity: 'error', nodeId: item.node.id,
+      property: 'effects/strokes', message: `Decorative PNG export failed: ${error instanceof Error ? error.message : 'unknown error'}` }); }
+  }
   for (const item of pending) {
     const image = images.getImageByHash(item.sourceHash);
     if (!image) { diagnostics.push({ code: 'UNRESOLVED_ASSET', severity: 'error', nodeId: item.node.id, property: 'fills', message: 'Image bytes are unavailable' }); continue; }
@@ -297,7 +353,7 @@ export async function captureSelection(
   const layout = nodes.some(node => node.layoutMode !== undefined && node.layoutMode !== 'NONE' ||
     node.horizontalSizing === 'HUG' || node.verticalSizing === 'HUG' ||
     ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign'].some(key => key in node));
-  const geometry = nodes.some(node => node.clipsContent || node.rotation !== undefined || node.scaleMode === 'CROP');
+  const geometry = nodes.some(node => node.clipsContent || node.rotation !== undefined || node.scaleMode === 'CROP' || node.fallback);
   const responsive = nodes.some(node => ['horizontalSizing' , 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => key in node));
   return { snapshot: { schemaVersion: { major: 1, minor: geometry ? 3 : layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
 }

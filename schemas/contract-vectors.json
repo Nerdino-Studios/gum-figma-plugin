@@ -886,5 +886,29 @@
         { "id": "image", "parentId": "root", "type": "IMAGE", "name": "Crop", "x": 0, "y": 0, "width": 40, "height": 20, "visible": true, "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "scaleMode": 42, "imageTransform": [[0.5, 0, 0.25], [0, 0.25, 0.25]] }
       ]
     }
-  }
+  },
+  { "name": "v1.3 approved decorative image", "kind": "snapshot", "valid": true,
+    "value": { "schemaVersion": { "major": 1, "minor": 3 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
+      "nodes": [{ "id": "image", "parentId": "root", "type": "IMAGE", "name": "Decoration", "x": 0, "y": 0, "width": 1, "height": 1, "visible": true,
+        "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "scaleMode": "FIT",
+        "fallback": { "feature": "effects/strokes", "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] } },
+  { "name": "v1.2 cannot carry fallback", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 2 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [],
+      "nodes": [{ "id": "image", "parentId": "root", "type": "IMAGE", "name": "Decoration", "x": 0, "y": 0, "width": 1, "height": 1, "visible": true,
+        "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "scaleMode": "FIT",
+        "fallback": { "feature": "effects/strokes", "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] } },
+  { "name": "text cannot carry fallback", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 3 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [],
+      "nodes": [{ "id": "label", "parentId": "root", "type": "TEXT", "name": "Label", "x": 0, "y": 0, "width": 1, "height": 1, "visible": true,
+        "characters": "Hi", "fontFamily": "Arial", "fontStyle": "Regular", "fontSize": 24,
+        "fallback": { "feature": "effects/strokes", "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] } },
+  { "name": "frame cannot carry fallback", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 3 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [],
+      "nodes": [{ "id": "root", "parentId": null, "type": "FRAME", "name": "Root", "x": 0, "y": 0, "width": 1, "height": 1, "visible": true,
+        "layoutMode": "NONE", "clipsContent": false,
+        "fallback": { "feature": "effects/strokes", "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] } }
 ]

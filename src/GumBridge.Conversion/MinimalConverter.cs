@@ -12,11 +12,14 @@ public sealed record GumElement(string Name, string Type, string? Parent, bool V
 public sealed record GumValue(string Name, string Type, string Value);
 public sealed record GumScreen(string Name, IReadOnlyList<GumElement> Elements);
 public sealed record ConversionResult(IReadOnlyList<GumScreen> Screens, IReadOnlyList<ConversionDiagnostic> Diagnostics);
+public sealed record FontKey(string Family, string Style, int Size);
+public sealed record FontAsset(string Path, string Hash);
 
 /// <summary>Pure lowering of the supported v1 geometry subset; unsafe combinations block output.</summary>
 public static class MinimalConverter
 {
-    public static ConversionResult Convert(JsonElement snapshot, IReadOnlyDictionary<string, (double Width, double Height)>? imageDimensions = null)
+    public static ConversionResult Convert(JsonElement snapshot, IReadOnlyDictionary<string, (double Width, double Height)>? imageDimensions = null,
+        IReadOnlyDictionary<FontKey, FontAsset>? fonts = null)
     {
         var errors = new List<ConversionDiagnostic>();
         if (!WireContracts.Validate("snapshot", snapshot))
@@ -89,8 +92,19 @@ public static class MinimalConverter
             }
             if (type == "TEXT" && node.TryGetProperty("color", out _))
                 errors.Add(new("UNSUPPORTED_FEATURE", id, "Text color mapping requires a verified native rule"));
-            if (type == "TEXT" && (node.GetProperty("fontFamily").GetString() != "Arial" || node.GetProperty("fontStyle").GetString() != "Regular" || node.GetProperty("fontSize").GetDouble() != 24))
-                errors.Add(new("MISSING_FONT", id, "Minimal sample supports pinned Arial Regular 24 only; configure a verified font mapping"));
+            FontAsset? mappedFont = null;
+            if (type == "TEXT")
+            {
+                var fontSize = node.GetProperty("fontSize").GetDouble();
+                var key = new FontKey(node.GetProperty("fontFamily").GetString()!, node.GetProperty("fontStyle").GetString()!,
+                    fontSize is > 0 and <= int.MaxValue && fontSize == Math.Truncate(fontSize) ? (int)fontSize : 0);
+                if (fonts is not null) fonts.TryGetValue(key, out mappedFont);
+                if (mappedFont is not null && (!System.Text.RegularExpressions.Regex.IsMatch(mappedFont.Path, @"^Assets/Fonts/[A-Za-z0-9_-]+\.fnt$") ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(mappedFont.Hash, @"^sha256:[0-9a-f]{64}$")))
+                    errors.Add(new("MISSING_FONT", id, "Font mapping requires a safe relative .fnt and SHA-256 digest"));
+                else if (mappedFont is null && key != new FontKey("Arial", "Regular", 24))
+                    errors.Add(new("MISSING_FONT", id, "Missing exact licensed font/style/size asset mapping"));
+            }
             if (type == "IMAGE")
             {
                 if (Property(node, "horizontalSizing", "FIXED") != "FIXED" || Property(node, "verticalSizing", "FIXED") != "FIXED" || HasLimit(node))
@@ -158,8 +172,16 @@ public static class MinimalConverter
             if (type == "TEXT")
             {
                 values.Add(new("Text", "string", node.GetProperty("characters").GetString()!));
-                values.Add(new("Font", "string", "Arial"));
-                values.Add(new("FontSize", "int", "24"));
+                if (mappedFont is not null)
+                {
+                    values.Add(new("UseCustomFont", "bool", "true"));
+                    values.Add(new("CustomFontFile", "string", mappedFont.Path));
+                }
+                else
+                {
+                    values.Add(new("Font", "string", "Arial"));
+                    values.Add(new("FontSize", "int", "24"));
+                }
             }
             if (type == "FRAME" && node.GetProperty("clipsContent").GetBoolean())
                 values.Add(new("ClipsChildren", "bool", "true"));
@@ -195,7 +217,7 @@ public static class MinimalConverter
                     {
                         if (node.TryGetProperty("rotation", out var imageRotation) && imageRotation.GetDouble() != 0)
                             errors.Add(new("UNSUPPORTED_FEATURE", id, "Rotated image with FIT/FILL viewport has unverified geometry"));
-                        // Keep the Figma image bounds as a clipping viewport; center the actual sprite.
+                        // Keep the source image bounds as a clipping viewport; center the actual sprite.
                         var viewport = values;
                         if (Property(node, "scaleMode", "FIT") == "FILL") viewport.Add(new("ClipsChildren", "bool", "true"));
                         elements.Add(new(name, "Container", parentName, node.GetProperty("visible").GetBoolean(), viewport));

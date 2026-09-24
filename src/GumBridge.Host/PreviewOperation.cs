@@ -67,7 +67,17 @@ public sealed class PreviewOperation
                     blobs[hash] = bytes;
                 }
             }
-        var converted = MinimalConverter.Convert(snapshot, sizes);
+        var fonts = ReadFontMappings(entry);
+        foreach (var node in snapshot.GetProperty("nodes").EnumerateArray())
+            if (node.GetProperty("type").GetString() == "TEXT")
+            {
+                var key = new FontKey(node.GetProperty("fontFamily").GetString()!, node.GetProperty("fontStyle").GetString()!,
+                    node.GetProperty("fontSize").GetDouble() is var size && size > 0 && size <= 256 && size == Math.Truncate(size) ? (int)size : 0);
+                if (fonts.TryGetValue(key, out var font))
+                    FontAssetValidator.Validate(Path.Combine(Path.GetDirectoryName(Path.Combine(entry.root, entry.gumx))!, font.Path),
+                        node.GetProperty("characters").GetString(), key.Size);
+            }
+        var converted =  MinimalConverter.Convert(snapshot, sizes, fonts);
         if (converted.Diagnostics.Count > 0 || converted.Screens.Count != 1) throw new InvalidOperationException("VALIDATION_FAILED: " + string.Join(';', converted.Diagnostics.Select(d => d.Code)));
         var screen = converted.Screens[0];
         var root = snapshot.GetProperty("nodes")[0];
@@ -110,7 +120,9 @@ public sealed class PreviewOperation
             }
             await toolRunner(stage, ["check", gumx]);
             await toolRunner(stage, ["fonts", gumx]);
-            if (snapshot.GetProperty("nodes").EnumerateArray().Any(node => node.GetProperty("type").GetString() == "TEXT") &&
+            if (snapshot.GetProperty("nodes").EnumerateArray().Any(node => node.GetProperty("type").GetString() == "TEXT" &&
+                node.GetProperty("fontFamily").GetString() == "Arial" && node.GetProperty("fontStyle").GetString() == "Regular" &&
+                node.GetProperty("fontSize").GetDouble() == 24 && !fonts.ContainsKey(new FontKey("Arial", "Regular", 24))) &&
                 !File.Exists(Path.Combine(Path.GetDirectoryName(gumx)!, "FontCache", "Font24Arial.fnt"))) throw new InvalidOperationException("MISSING_FONT");
             await toolRunner(stage, ["codegen", gumx]);
             var png = Path.Combine(stage, "result.png");
@@ -120,6 +132,51 @@ public sealed class PreviewOperation
             return (artifactId, artifacts.OutputHash(entry.id, snapshotId, target, artifactId), target);
         }
         finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+    }
+    // Explicit workspace-local licensed bitmap fonts; .fnt + PNG pages are copied into staging with the sample.
+    // Font mappings and all asset bytes participate in TargetHash. Never resolve a Figma-supplied path.
+    public static IReadOnlyDictionary<FontKey, FontAsset> ReadFontMappings(WorkspaceEntry entry)
+    {
+        var result = new Dictionary<FontKey, FontAsset>();
+        var config = Path.Combine(entry.root, "font-mappings.json");
+        if (!File.Exists(config)) return result;
+        if (new FileInfo(config).Length > 65536) throw new InvalidOperationException("MISSING_FONT: mapping file too large");
+        using var json = JsonDocument.Parse(File.ReadAllBytes(config));
+        if (json.RootElement.ValueKind != JsonValueKind.Array || json.RootElement.GetArrayLength() > 64)
+            throw new InvalidOperationException("MISSING_FONT: invalid mapping list");
+        var gumDirectory = Path.GetDirectoryName(Path.Combine(entry.root, entry.gumx))!;
+        foreach (var mapping in json.RootElement.EnumerateArray())
+        {
+            if (mapping.ValueKind != JsonValueKind.Object || mapping.EnumerateObject().Count() != 5 ||
+                !new[] { "family", "style", "size", "file", "sha256" }.All(k => mapping.TryGetProperty(k, out _)))
+                throw new InvalidOperationException("MISSING_FONT: invalid mapping fields");
+            var familyValue = mapping.GetProperty("family");
+            var styleValue = mapping.GetProperty("style");
+            var fileValue = mapping.GetProperty("file");
+            var digestValue = mapping.GetProperty("sha256");
+            if (familyValue.ValueKind != JsonValueKind.String || styleValue.ValueKind != JsonValueKind.String ||
+                fileValue.ValueKind != JsonValueKind.String || digestValue.ValueKind != JsonValueKind.String)
+                throw new InvalidOperationException("MISSING_FONT: invalid mapping value types");
+            var family = familyValue.GetString();
+            var style = styleValue.GetString();
+            var size = mapping.GetProperty("size");
+            var file = fileValue.GetString();
+            var digest = digestValue.GetString();
+            if (string.IsNullOrWhiteSpace(family) || string.IsNullOrWhiteSpace(style) || family.Length > 100 || style.Length > 100 ||
+                size.ValueKind != JsonValueKind.Number || !size.TryGetInt32(out var points) || points is < 1 or > 256 ||
+                file is null || !Regex.IsMatch(file, @"^Assets/Fonts/[A-Za-z0-9_-]+\.fnt$") ||
+                digest is null || !Regex.IsMatch(digest, @"^sha256:[0-9a-f]{64}$"))
+                throw new InvalidOperationException("MISSING_FONT: invalid font mapping");
+            var path = Path.Combine(gumDirectory, file);
+            if (!File.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 ||
+                new FileInfo(path).Length is < 1 or > 1048576 ||
+                "sha256:" + Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))) != digest)
+                throw new InvalidOperationException("MISSING_FONT: font descriptor missing or hash mismatch");
+            FontAssetValidator.Validate(path, expectedSize: points);
+            if (!result.TryAdd(new FontKey(family, style, points), new FontAsset(file, digest)))
+                throw new InvalidOperationException("MISSING_FONT: duplicate font mapping");
+        }
+        return result;
     }
     public static void ValidateImagePixels(IEnumerable<(uint Width, uint Height)> images)
     {

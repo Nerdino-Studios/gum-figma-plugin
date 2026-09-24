@@ -91,6 +91,8 @@
           "type": "number",
           "exclusiveMinimum": 0
         },
+        "fallback": { "type": "object", "additionalProperties": false, "required": ["feature", "fingerprint"],
+          "properties": { "feature": { "const": "effects/strokes" }, "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } } },
         "imageHash": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
@@ -159,7 +161,7 @@
                     "fontStyle"
                   ]
                 },
-                { "required": ["imageTransform"] }
+                { "required": ["imageTransform"] }, { "required": ["fallback"] }
               ]
             }
           }
@@ -203,7 +205,7 @@
                 },
                 { "required": ["itemSpacing"] }, { "required": ["paddingLeft"] }, { "required": ["paddingRight"] },
                 { "required": ["paddingTop"] }, { "required": ["paddingBottom"] }, { "required": ["counterAxisAlignItems"] },
-                { "required": ["imageTransform"] }
+                { "required": ["imageTransform"] }, { "required": ["fallback"] }
               ]
             }
           }
@@ -339,6 +341,11 @@
           { "required": ["counterAxisAlignItems"] }, { "required": ["layoutAlign"] },
           { "properties": { "horizontalSizing": { "const": "HUG" } }, "required": ["horizontalSizing"] },
           { "properties": { "verticalSizing": { "const": "HUG" } }, "required": ["verticalSizing"] }
+        ] } } } } }
+      }, {
+        "if": { "properties": { "schemaVersion": { "properties": { "minor": { "maximum": 2 } } } } },
+        "then": { "properties": { "nodes": { "items": { "not": { "anyOf": [
+          { "required": ["rotation"] }, { "required": ["imageTransform"] }, { "required": ["fallback"] }
         ] } } } } }
       }],
       "required": [
