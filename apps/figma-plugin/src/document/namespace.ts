@@ -1,4 +1,4 @@
-// Only the document root holds the association. Never put pairing credentials here.
+// Only the document root holds the association. Never put CLI credentials here.
 const key = 'gumbridge.designNamespace.v1';
 const valid = (value: string) => /^[A-Za-z0-9_-]{1,100}$/.test(value);
 export function retainedNamespace(root: { getPluginData(key: string): string }): string | null {

@@ -39,9 +39,7 @@ public sealed class PublicationTests
             await using (var host = await PairingHost.StartAsync(0, () => now, data))
             {
                 using var client = await Paired(host);
-                Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/v1/publications/begin", new { workspaceId = workspace, snapshot })).StatusCode);
-                var token = await Token(host, client);
-                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/v1/publications/begin", new { workspaceId = workspace, snapshot })).StatusCode);
                 var begin = await client.PostAsJsonAsync("/v1/publications/begin", new { schemaVersion = new { major = 1, minor = 0 }, workspaceId = workspace, snapshot });
                 Assert.Equal(HttpStatusCode.OK, begin.StatusCode);
                 var transfer = (await begin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("transferId").GetString()!;
@@ -76,7 +74,6 @@ public sealed class PublicationTests
             await using (var host = await PairingHost.StartAsync(0, () => now, data))
             {
                 using var client = await Paired(host);
-                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", await Token(host, client));
                 Assert.Equal(2, (await client.GetFromJsonAsync<JsonElement>("/v1/publications?workspaceId=" + workspace)).GetProperty("snapshots").GetArrayLength());
             }
         }
@@ -161,8 +158,6 @@ public sealed class PublicationTests
         finally { if (Directory.Exists(data)) Directory.Delete(data, true); }
     }
     private static async Task<HttpClient> Paired(PairingHost host) { await Task.CompletedTask; return new HttpClient { BaseAddress = new Uri(host.Address) }; }
-    private static async Task<string> Token(PairingHost host, HttpClient client) =>
-        (await (await client.PostAsJsonAsync("/v1/pair", new { challenge = host.IssueChallengeForLocalConsent() })).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString()!;
     private static string Canonical(JsonElement value) => value.ValueKind switch
     {
         JsonValueKind.Object => "{" + string.Join(',', value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal).Select(p => JsonSerializer.Serialize(p.Name) + ":" + Canonical(p.Value))) + "}",

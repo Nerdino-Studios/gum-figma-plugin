@@ -26,13 +26,11 @@ async function panel(cryptoValue) {
   const compiled = await build({ entryPoints: ['src/ui/index.ts'], absWorkingDir: new URL('../', import.meta.url).pathname,
     bundle: true, write: false, format: 'esm', platform: 'browser', plugins: [{ name: 'bridge-fake', setup(builder) {
       builder.onResolve({ filter: /bridge-client/ }, () => ({ path: 'bridge', namespace: 'fake' }));
-      builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: 'export class BridgeClient { async pair() {} async workspaces() { return { workspaces: [{ id: "workspace", label: "Sample" }] }; } }', loader: 'js' }));
+      builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: 'export class BridgeClient { async workspaces() { return { workspaces: [{ id: "workspace", label: "Sample" }] }; } }', loader: 'js' }));
     } }] });
   await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64') + '#' + ++panelCount);
   find(navigation, 'Connection').listeners.click();
-  const form = content.children.find(child => child.tag === 'form');
-  form.children[0].value = 'challenge';
-  await form.listeners.submit({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
   find(navigation, 'Preview and changes').listeners.click();
   return { content, messages, receive: pluginMessage => listeners.message({ data: { pluginMessage } }) };
 }

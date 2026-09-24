@@ -14,11 +14,7 @@ public static class Program
             return;
         }
         await using var host = await PairingHost.StartAsync();
-        Console.WriteLine("Bridge listening at " + host.Address + ". Press Enter locally to authorize one plugin pairing (Ctrl+C to stop).");
-        while (Console.ReadLine() is not null)
-        {
-            Console.WriteLine("One-time challenge (expires in 2 minutes): " + host.IssueChallengeForLocalConsent());
-            Console.WriteLine("Enter again to generate another challenge.");
-        }
+        Console.WriteLine("Bridge listening at " + host.Address + ". Plugin connects automatically; Ctrl+C to stop.");
+        await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan);
     }
 }

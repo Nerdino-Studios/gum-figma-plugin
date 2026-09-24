@@ -37,8 +37,9 @@ test('fresh build generates a Figma-importable manifest basename and build artif
     assert.match(scene, /showUI/);
     assert.match(ui, /Selection/);
     assert.match(ui, /Preview and changes/);
-    assert.match(ui, /Pair and request workspaces/);
-    assert.match(ui, /v1\/pair/);
+    assert.match(ui, /Reconnect to local bridge/);
+    assert.match(ui, /v1\/workspaces/);
+    assert.doesNotMatch(ui, /v1\/pair|v1\/session|Bearer /);
     assert.doesNotMatch(scene, /v1\/pair|Bearer /);
     assert.doesNotMatch(ui, /UI_BUNDLE/);
   });

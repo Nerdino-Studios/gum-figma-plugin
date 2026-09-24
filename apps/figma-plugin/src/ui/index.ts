@@ -1,24 +1,46 @@
 import { initialPanel, selectionPanel, type ViewKey } from './state';
 import { isSceneToUi } from '../transport/messages';
-import { BridgeClient } from '../transport/bridge-client';
+import { BridgeClient, type Workspace } from '../transport/bridge-client';
 import { hashBytes } from '../hash';
 
 const bridge = new BridgeClient();
-let connectionStatus = 'Offline — enter a locally authorized challenge to pair.';
+let connectionStatus = 'Connecting to local Gum bridge…';
 let workspaceId: string | undefined;
+let workspaces: Workspace[] = [];
+let connecting = false;
+async function connect(): Promise<void> {
+  if (connecting) return;
+  connecting = true;
+  connectionStatus = 'Connecting to local Gum bridge…'; render();
+  try {
+    const result = await bridge.workspaces();
+    workspaces = result.workspaces;
+    if (!workspaces.some(item => item.id === workspaceId)) {
+      if (workspaceId) { stale = true; publishedId = undefined; }
+      workspaceId = workspaces[0]?.id;
+    }
+    connectionStatus = workspaces.length
+      ? `Connected to local Gum bridge. Publishing to ${workspaces.find(item => item.id === workspaceId)?.label} (${workspaceId}). Select a workspace below.`
+      : 'Connected; no workspaces registered. Run gumbridge sample init --directory <new-absolute-directory> locally, then reconnect.';
+  } catch {
+    connectionStatus = 'Offline — start gumbridge serve locally, then click Reconnect to local bridge. Publication and preview unavailable.';
+  }
+  connecting = false; render();
+}
 let namespace = '';
 let retained: string | null = null;
 let associated = false;
 let setupRequired = false;
 let busy = false;
 let alias = '';
-let publicationStatus = 'Unpublished — select a frame, pair, then capture and publish.';
+let publicationStatus = 'Unpublished — select a frame and workspace, then capture and publish.';
 let publishedId: string | undefined;
 let previewUrl: string | undefined;
 let previewIdentity = '';
 let stale = false;
 let sourceRevision = 0;
 let captureRevision = 0;
+let captureWorkspace: string | undefined;
 let publishedStale = false;
 
 const panel = initialPanel();
@@ -121,7 +143,9 @@ function render(): void {
       if (!/^[A-Za-z0-9_-]{1,100}$/.test(namespace) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
         publicationStatus = 'Unpublished: enter a path-free design namespace and valid public alias.'; render(); return;
       }
+      if (!workspaceId) { publicationStatus = 'Unpublished: select a workspace before capture.'; render(); return; }
       busy = true;
+      captureWorkspace = workspaceId;
       captureRevision = sourceRevision;
       button.disabled = true;
       publicationStatus = 'Capturing selection…';
@@ -132,39 +156,29 @@ function render(): void {
     content.append(button);
   }
   if (active === 'connection') {
-    const form = document.createElement('form');
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.required = true;
-    input.maxLength = 64;
-    input.placeholder = 'Local one-time challenge';
-    input.setAttribute('aria-label', 'Local one-time challenge');
     const button = document.createElement('button');
-    button.type = 'submit';
-    button.textContent = 'Pair and request workspaces';
-    form.append(input, button);
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      const challenge = input.value.trim();
-      input.value = '';
-      button.disabled = true;
-      connectionStatus = 'Connecting…';
-      render();
-      try {
-        await bridge.pair(challenge);
-        const result = await bridge.workspaces();
-        const nextWorkspace = result.workspaces[0]?.id;
-        if (nextWorkspace !== workspaceId) stale = true;
-        workspaceId = nextWorkspace;
-        connectionStatus = result.workspaces.length === 0
-          ? 'Paired; no workspaces yet. Run gumbridge sample init --directory <new-absolute-directory> locally.'
-          : `Paired; publishing to ${result.workspaces[0].label} (${result.workspaces[0].id}). No conversion or preview is available.`;
-      } catch (error) {
-        connectionStatus = error instanceof Error ? error.message : 'Bridge unavailable; check the local host.';
+    button.textContent = 'Reconnect to local bridge';
+    button.disabled = connecting || busy;
+    button.addEventListener('click', () => { if (!busy) void connect(); });
+    content.append(button);
+    if (workspaces.length) {
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', 'Publication workspace');
+      for (const workspace of workspaces) {
+        const option = document.createElement('option');
+        option.value = workspace.id;
+        option.textContent = workspace.label;
+        select.append(option);
       }
-      render();
-    });
-    content.append(form);
+      select.value = workspaceId ?? '';
+      select.disabled = busy;
+      select.addEventListener('change', () => {
+        if (busy) { render(); return; }
+        if (workspaceId !== select.value) { workspaceId = select.value; stale = true; publishedId = undefined; publicationStatus = 'Unpublished for selected workspace — capture and publish.'; connectionStatus = `Connected to local Gum bridge. Publishing to ${workspaces.find(item => item.id === workspaceId)?.label} (${workspaceId}). Select a workspace below.`; }
+        render();
+      });
+      content.append(select);
+    }
   }
 }
 
@@ -196,12 +210,13 @@ window.addEventListener('message', event => {
   if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'capture-result' &&
       'result' in message && typeof message.result === 'object' && message.result !== null && 'snapshot' in message.result && 'diagnostics' in message.result) {
     const result = message.result as { snapshot: { snapshotId: string; schemaVersion: { major: 1; minor: 0 } } | null; assets: { hash: string; bytes: Uint8Array }[]; diagnostics: { code: string; message: string }[] };
-    if (!result.snapshot || result.diagnostics.length || !workspaceId) {
+    const requestedWorkspace = captureWorkspace;
+    captureWorkspace = undefined;
+    if (!result.snapshot || result.diagnostics.length || !requestedWorkspace || workspaceId !== requestedWorkspace) {
       busy = false;
-      publicationStatus = `Unpublished: ${result.diagnostics.map(item => `${item.code}: ${item.message}`).join('; ') || 'Capture unavailable or no workspace paired.'}`;
+      publicationStatus = `Unpublished: ${result.diagnostics.map(item => `${item.code}: ${item.message}`).join('; ') || 'Capture unavailable or workspace changed. Capture again for the selected workspace.'}`;
       render(); return;
     }
-    const requestedWorkspace = workspaceId;
     publicationStatus = 'Uploading and finalizing…'; render();
     void bridge.publish(requestedWorkspace, { snapshot: result.snapshot, assets: result.assets }).then(published => {
       if (workspaceId !== requestedWorkspace) throw new Error('Publication completed for previous workspace; select it before preview.');
@@ -224,3 +239,4 @@ window.addEventListener('message', event => {
   render();
 });
 render();
+void connect();

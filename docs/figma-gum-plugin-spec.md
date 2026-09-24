@@ -20,7 +20,7 @@ Figma document + mapping metadata
    Figma plugin: select / map / publish
               |
      immutable design snapshot
-              | authenticated loopback HTTP
+              | fixed local-only loopback HTTP
               v
         Local bridge host <---- CLI or MCP stdio adapter <---- External agent
               |
@@ -68,7 +68,7 @@ Use Figma Design desktop on macOS and Windows for the initial compatibility matr
 
 Use TypeScript with strict checking and a small component-based plugin UI. The UI framework is replaceable and must not own conversion rules. Use a pinned .NET 10 SDK for bridge code and a pinned compatible Gum toolchain. Start the standalone renderer with MonoGame DesktopGL; keep FlatRedBall2 and other application-host conventions outside the conversion core. This is an implementation target, not a claim that compatibility has already been tested.
 
-Use authenticated loopback HTTP between plugin and bridge. Use MCP stdio between an agent and the bridge's MCP adapter. The adapter forwards to the running bridge host. The CLI uses the same host API. Do not add a second writer, independent background service, cloud relay, Figma REST-token requirement, or official-Figma-MCP dependency.
+Use fixed local-only loopback HTTP between plugin and bridge. Use MCP stdio between an agent and the bridge's MCP adapter. The adapter forwards to the running bridge host. The CLI uses the same host API. Do not add a second writer, independent background service, cloud relay, Figma REST-token requirement, or official-Figma-MCP dependency.
 
 Use local versioned JSON metadata and content-addressed asset files for v1 storage. The host is the sole writer. Persist operation status and recovery journals; no database server or event-sourcing framework is required. Keep storage behind narrow interfaces.
 
@@ -96,7 +96,7 @@ Gum includes HTML-import tooling worth inspecting for prior conversion/fidelity 
 
 Figma separates scene access from a custom iframe UI, with message passing between them. Its network guide also documents a plugin Fetch API; iframe networking is an implementation choice, not a claim that no other networking API exists. Use one tested BridgeClient implementation and keep network transport out of document extraction. [F1][F2]
 
-Before feature expansion, implementation MUST prove: development-plugin installation, authenticated loopback communication, native Gum loading, code generation, fonts, and a rendered sample on each supported OS. Record exact versions, native dependencies, and any limitation in `docs/compatibility.md`. An unavailable package feature requires an explicit source-build pin or a documented upstream blocker, not an undocumented workaround.
+Before feature expansion, implementation MUST prove: development-plugin installation, automatic fixed-route loopback communication, native Gum loading, code generation, fonts, and a rendered sample on each supported OS. Record exact versions, native dependencies, and any limitation in `docs/compatibility.md`. An unavailable package feature requires an explicit source-build pin or a documented upstream blocker, not an undocumented workaround.
 
 ## 4. User workflow and plugin UI
 
@@ -114,9 +114,9 @@ The plugin may check field types, aliases, missing selection, and available Figm
 
 The sample-design creator is test/onboarding functionality, not a second UI authoring system. Its sources and small assets are bundled with the project. Font setup is documented and missing fonts produce an actionable message.
 
-### 4.3 Pair with the bridge
+### 4.3 Connect to the bridge
 
-Start the local bridge, create or choose its Sample workspace, and pair through a one-time local consent flow. The plugin displays connection state, target label, capability/catalog version, and toolchain readiness.
+On opening, the plugin checks the local bridge automatically and lists registered workspaces. Show an actionable offline state and a bounded reconnect button if the host is unavailable. The user explicitly chooses a workspace; no challenge or plugin token is needed. Display connection state, target label, capability/catalog version, and toolchain readiness where implemented.
 
 The default choice is Sample workspace. A later developer flow can register an existing local root, `.csproj`, `.gumx`, generated-output locations, font configuration, and trusted build/render profile. Paths are selected locally; Figma metadata cannot authorize arbitrary directories. Designers see labels and catalogs, not unrestricted filesystem access.
 
@@ -171,7 +171,7 @@ The external agent is not shipped as part of either product. Multiple clients ma
 | `FigmaSnapshotExtractor` | Capture typed design data, dependencies, variable values, assets, and references with consistency guards. | Gum serialization or networking policy. |
 | `MappingMetadataStore` | Read/write small plugin-owned mappings and stable aliases. | Credentials, asset storage, or runtime behavior code. |
 | `PluginMessageRouter` | Validate messages between scene context and UI; correlate requests. | Acting as a catch-all domain service. |
-| `BridgeClient` | Authenticated protocol calls, transfer retries, and result retrieval. | Figma layout interpretation or direct file writes. |
+| `BridgeClient` | Fixed loopback protocol calls, transfer retries, and result retrieval. | Figma layout interpretation or direct file writes. |
 | UI view models/components | Present selection, mapping, connection, and review state. | Duplicating converter rules or embedding an agent. |
 | `SampleDesignBuilder` | Explicitly create onboarding/test designs on a separate page. | Modifying ordinary user designs automatically. |
 
@@ -187,7 +187,7 @@ Use the official Figma typings behind the scene adapter. Unit tests use a narrow
 | Storage | `ISnapshotStore`, `IArtifactStore`, `IOperationStore`; filesystem implementations | Content-addressed blobs, immutable snapshots, bounded caches, operation records. |
 | Gum tooling | `IGumToolchain`, `GumModelSerializer`, `GumCliRunner`, `ControlCatalogProvider`, `SampleRuntimeAdapter` | Native Gum serialization, pinned tool invocation, adapter contracts, target compile/render/test. |
 | Managed files | `IManagedFileWriter`, `OwnershipPlanner`, `WorkspaceLock`, `RecoveryJournal` | Ownership checks, diffs, staged updates, stale-plan rejection, safe deletion and recovery. |
-| Host and transport | HTTP route handlers, CLI handlers, MCP tools, `LocalBridgeClient` | Authentication, transport validation, command parsing, dependency composition; delegate operations to Application. |
+| Host and transport | HTTP route handlers, CLI handlers, MCP tools, `LocalBridgeClient` | Loopback/Host/Origin validation, CLI-only registration boundary, command parsing, dependency composition; delegate operations to Application. |
 
 Create interfaces at side-effect or target boundaries, not an interface for every trivial class. Keep implementation-specific rules private where possible. An operation handler may coordinate modules but MUST NOT grow into a class that extracts Figma, converts layout, runs tools, and writes files itself.
 
@@ -273,7 +273,7 @@ While the plugin is closed, stored snapshots remain usable. The bridge must neve
 
 ### 6.4 Determinism and cache keys
 
-Derive the snapshot ID from canonical semantic design data, approved mappings, and content-addressed asset/reference inputs. Keep capture times, request IDs, pairing sessions, and machine paths out of the canonical payload.
+Derive the snapshot ID from canonical semantic design data, approved mappings, and content-addressed asset/reference inputs. Keep capture times, request IDs, plugin connection state, and machine paths out of the canonical payload.
 
 A conversion key additionally includes the snapshot ID, converter version, effective target profile, Gum/codegen version, external-component hashes, font assets and generation settings, and relevant rendering environment for preview caches. Normalization rules cover key ordering, invariant number formatting, negative zero, line endings, stable filenames, and insignificant metadata. Reject non-finite numbers.
 
@@ -441,14 +441,14 @@ CLI and MCP modes discover the per-user running host through a protected local d
 
 | API group | Required behavior |
 |---|---|
-| Pair session | Redeem an expiring one-time challenge initiated locally; return a scoped in-memory plugin session. |
+| Connection check | List registered workspaces on open and on bounded user reconnect; no plugin session. |
 | List allowed workspaces / catalog | Include Sample workspace; return labels, capability status, and versioned catalog data, not arbitrary paths. |
 | Begin / upload blobs / finalize publication | Stage and validate a design bundle, then publish its immutable ID. No target-file updates. |
 | Analyze snapshot | Return target-specific compatibility/mapping diagnostics for an explicit snapshot/profile. |
 | Create plan | Generate and validate staged output, then return a plan ID, changes, approvals, and preview references. |
-| Read operation / artifact | Return status, diagnostics, and bounded image/JSON artifacts authorized for this workspace/session. |
+| Read operation / artifact | Return status, diagnostics, and bounded image/JSON artifacts bound to the requested registered workspace and immutable snapshot/target identity. |
 | Review plan | Display exact changes and record approval for a specific plan hash; never approve an unspecified future change. |
-| Cancel operation / revoke session | Cancel before the protected apply step or revoke future requests. Recovery rules govern an interrupted apply. |
+| Cancel operation | Cancel before the protected apply step. Recovery rules govern an interrupted apply. |
 
 Use versioned routes, for example `/v1/...`, and typed message envelopes. Do not add a general filesystem endpoint, shell endpoint, code-evaluation endpoint, or remotely callable Figma-edit endpoint.
 
@@ -487,13 +487,13 @@ On disconnect, show unavailable status and preserve published snapshots. Cancell
 
 ## 12. Security, privacy, and operational limits
 
-Bind only to loopback. Validate Host values and reject arbitrary remote origins/routes. Pair through local user action with a short-lived, high-entropy one-time challenge. Store plugin session tokens in memory; re-pair after restart for v1. Agent/CLI host credentials live in per-user protected local storage, not in the design or repository. Do not use cookies or URL query tokens.
+Bind only to loopback. Validate Host values and reject arbitrary remote origins/routes. The development plugin connects automatically without challenge or session token. A local malicious process can call plugin routes: this is a local development trust boundary, not multi-user authentication. CLI-only registration retains a per-host credential in protected per-user local storage; refuse browser-origin registration. Do not use cookies or URL query tokens.
 
-Figma documents opaque/null iframe origins, network allowlists, and local development endpoints. Test actual authenticated requests, preflight, and any local-network permission prompt in the supported desktop clients. Permissive CORS required by a Figma context is not authentication; require the independent token on every privileged call. Use precise manifest endpoints rather than unrestricted network access. Development-manifest success does not certify marketplace distribution. [F2][F7]
+Figma documents opaque/null iframe origins, network allowlists, and local development endpoints. Test actual local requests, preflight, and any local-network permission prompt in the supported desktop clients. Permissive CORS is not authentication; keep routes fixed and CLI registration inaccessible to plugin origins. Use precise manifest endpoints rather than unrestricted network access. Development-manifest success does not certify marketplace distribution. [F2][F7]
 
 Use `editorType: ["figma"]` and dynamic page access in the development manifest. Obtain a legitimate plugin ID through Figma's development flow; ship a manifest template and setup instructions, not a fabricated universal ID. Load only pages needed for selected dependencies. [F7]
 
-Tokens, pairing challenges, local absolute paths, and credentials must not enter Figma metadata, snapshots, normal logs, prompts, or source control. The deliberate local display of a one-time pairing challenge is the only pairing-secret UI exposure. Authenticated artifact retrieval must not leak assets through guessed IDs or unrelated workspace sessions.
+CLI credentials and local absolute paths must not enter Figma metadata, snapshots, normal logs, prompts, or source control. Artifact retrieval must check registered workspace and immutable snapshot/target provenance; plugin routes do not authenticate local processes.
 
 Register trusted local project roots and fixed build/render command profiles. Canonicalize generated paths; reject traversal, symlink/junction escapes, collisions, and writes outside approved roots. Run tools with argument arrays, not interpolated shells. Treat names and text as data, escape XML/C# literals, and prohibit DTD/external-entity resolution in XML parsing.
 
@@ -511,7 +511,7 @@ No product telemetry, billing, cloud account, hosted relay, remote deployment, o
 
 Every behavior change and defect fix MUST start with a failing test or reproducible acceptance check. Confirm the failure is caused by the missing behavior, implement the smallest change that passes, then refactor while keeping tests green. Do not write the implementation first and use tests only as retrospective confirmation.
 
-An agent task must name the test layer, expected red failure, and green completion condition. For Figma-client behavior that cannot run in ordinary unit tests, pair contract/UI tests with a small real-client check. Do not claim that mock-only coverage proves actual plugin API or local-network behavior. This is a development process requirement; a separate red/green evidence archive is not required.
+An agent task must name the test layer, expected red failure, and green completion condition. For Figma-client behavior that cannot run in ordinary unit tests, supplement contract/UI tests with a small real-client check. Do not claim that mock-only coverage proves actual plugin API or local-network behavior. This is a development process requirement; a separate red/green evidence archive is not required.
 
 ### 13.2 Required test layers
 
@@ -548,7 +548,7 @@ For simple geometry, the default fixture target is at most one logical pixel of 
 | ID | Given / when | Required result |
 |---|---|---|
 | A01 | Open the plugin in a blank document with no bridge or game. | Useful empty state, mapping UI and built-in catalog work; preview/publish requirements are clear. |
-| A02 | Explicitly create the sample design, initialize Sample workspace, and pair. | Sample assets/controls/references are available without touching existing user layers or a game repository. |
+| A02 | Explicitly create the sample design, initialize Sample workspace, and connect automatically. | Sample assets/controls/references are available without touching existing user layers or a game repository. |
 | A03 | Publish the supported menu and request generation through CLI/MCP. | Native Gum loads, generated C# compiles, sample runtime displays the menu, preview returns to plugin. |
 | A04 | Repeat identical design/mappings/toolchain inputs. | Zero managed-file diff, no timestamp-only manifest changes, no duplicate assets/components. |
 | A05 | Change button style, spacing, and label in Figma after binding its handler. | Visuals update; handwritten handler is byte-for-byte unchanged and fires exactly once. |
@@ -584,7 +584,7 @@ The [Figma Plugin Linear project](https://linear.app/nerdino/project/figma-plugi
 | [Compatibility record and minimal native Gum sample](https://linear.app/nerdino/issue/GAM-209) | Missing-tool/font/load check fails; pinned toolchain loads and renders a simple sample. Record macOS/Windows requirements. |
 | [Development-plugin shell and offline/empty views](https://linear.app/nerdino/issue/GAM-208) | Empty document previously fails/blocks; panel now opens with no workspace or bridge. |
 | [Versioned request, snapshot, catalog and diagnostic schemas](https://linear.app/nerdino/issue/GAM-206) | Both sides reject the same invalid examples and accept the same minimal valid input. Extend schemas with each use case. |
-| [Bridge host pairing and authenticated request from real Figma](https://linear.app/nerdino/issue/GAM-210) | Missing/invalid credential is denied; real desktop plugin round trip passes on supported OSes. |
+| [Historical bridge pairing check](https://linear.app/nerdino/issue/GAM-210) | Historical authenticated real-desktop observation; GAM-240 replaces plugin pairing with automatic local-only connection. New real-client verification remains required. |
 | [Bundled sample workspace initialization and local registration](https://linear.app/nerdino/issue/GAM-214) | Conflicting directory is rejected; a new directory gets a working isolated sample, not a required game association. |
 | [Thin frame/text/image extraction and canonical hashing](https://linear.app/nerdino/issue/GAM-215) | Selection/name/capture tests fail, then produce bounded typed snapshots with stable hashes. |
 | [Staged blob publication and snapshot store](https://linear.app/nerdino/issue/GAM-212) | Missing/corrupt blob cannot publish; complete retried upload finalizes exactly once. |

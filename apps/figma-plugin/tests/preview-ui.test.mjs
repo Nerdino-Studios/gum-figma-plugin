@@ -29,18 +29,18 @@ test('selection changes immediately label a visible successful preview stale', a
   const compiled = await build({ entryPoints: ['src/ui/index.ts'], absWorkingDir: new URL('../', import.meta.url).pathname, bundle: true, write: false, format: 'esm', platform: 'browser', plugins: [{ name: 'bridge-fake', setup(builder) {
     builder.onResolve({ filter: /bridge-client/ }, () => ({ path: 'bridge', namespace: 'fake' }));
     builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: `export class BridgeClient {
-      async pair() {} async workspaces() { return { workspaces: [{ id: 'workspace', label: 'Sample' }] }; }
+      async workspaces() { return { workspaces: [{ id: 'workspace', label: 'Sample' }] }; }
       async publish() { return { snapshotId: 'sha256:snapshot' }; }
       async preview() { if (globalThis.previewFailure) throw new Error(globalThis.previewFailure); return { png: new Uint8Array([137,80,78,71,13,10,26,10]), outputHash: globalThis.previewOutputHash ?? '${outputHash}', targetHash: 'sha256:target', artifactId: 'sha256:artifact' }; }
     }`, loader: 'js' }));
   } }] });
   await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
   find(navigation, 'Connection').listeners.click();
-  const form = content.children.find(child => child.tag === 'form');
-  form.children[0].value = 'challenge';
-  await form.listeners.submit({ preventDefault() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
   listeners.message({ data: { pluginMessage: { type: 'namespace-associated', namespace: 'design' } } });
   find(navigation, 'Preview and changes').listeners.click();
+  content.children.find(child => child.tag === 'input' && !child.readOnly).value = 'MainMenu';
+  find(content, 'Capture selection and publish').listeners.click();
   listeners.message({ data: { pluginMessage: { type: 'capture-result', result: { snapshot: { snapshotId: 'sha256:snapshot' }, assets: [], diagnostics: [] } } } });
   await flush();
   const originalCrypto = globalThis.crypto;

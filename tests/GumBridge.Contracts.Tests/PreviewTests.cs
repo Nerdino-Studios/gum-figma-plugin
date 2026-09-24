@@ -19,7 +19,7 @@ public sealed class PreviewTests
 {
     private static string TempRoot => OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath();
     [Fact]
-    public async Task ArtifactAndPreviewRoutesRequireSession()
+    public async Task ArtifactAndPreviewRoutesRequireRegisteredWorkspace()
     {
         var data = Path.Combine(TempRoot, "preview-http-" + Guid.NewGuid().ToString("N"));
         try
@@ -27,14 +27,7 @@ public sealed class PreviewTests
             await using (var host = await PairingHost.StartAsync(0, localDataDirectory: data))
             using (var client = new HttpClient { BaseAddress = new Uri(host.Address.Replace("127.0.0.1", "localhost")) })
             {
-                Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/v1/preview-target?workspaceId=" + new string('a', 32))).StatusCode);
-                Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/v1/previews", new { schemaVersion = new { major = 1, minor = 0 }, workspaceId = new string('a', 32), snapshotId = "sha256:" + new string('b', 64), targetHash = "sha256:" + new string('c', 64) })).StatusCode);
                 var artifactRoute = "/v1/artifacts?workspaceId=" + new string('a', 32) + "&snapshotId=sha256:" + new string('b', 64) + "&targetHash=sha256:" + new string('c', 64) + "&artifactId=sha256:" + new string('d', 64);
-                Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(artifactRoute)).StatusCode);
-                var challenge = host.IssueChallengeForLocalConsent();
-                var pair = await client.PostAsJsonAsync("/v1/pair", new { challenge });
-                var token = (await pair.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString();
-                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
                 Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(artifactRoute)).StatusCode);
                 Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/v1/previews", new { schemaVersion = new { major = 1, minor = 0 }, workspaceId = new string('a', 32), snapshotId = "sha256:" + new string('b', 64), targetHash = "sha256:" + new string('c', 64) })).StatusCode);
             }
@@ -50,7 +43,7 @@ public sealed class PreviewTests
     }
 
     [Fact]
-    public async Task FailedNativeToolIncludesStepBoundedOutputAndRetainsUnauthorizedBoundary()
+    public async Task FailedNativeToolIncludesStepBoundedOutputAndRetainsTarget()
     {
         var data = Path.Combine(TempRoot, "preview-failure-" + Guid.NewGuid().ToString("N"));
         try
@@ -58,9 +51,6 @@ public sealed class PreviewTests
             await using var host = await PairingHost.StartAsync(0, localDataDirectory: data);
             using var client = new HttpClient { BaseAddress = new Uri(host.Address.Replace("127.0.0.1", "localhost")) };
             var request = new { schemaVersion = new { major = 1, minor = 0 }, workspaceId = new string('a', 32), snapshotId = "sha256:" + new string('b', 64), targetHash = "sha256:" + new string('c', 64) };
-            var denied = await client.PostAsJsonAsync("/v1/previews", request);
-            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
-            Assert.DoesNotContain("gumcli", await denied.Content.ReadAsStringAsync());
             var failure = PreviewOperation.ToolFailure("check", "", "Missing screen /private/tmp/example.gusx " + new string('x', 5000));
             Assert.Equal("VALIDATION_FAILED", failure.Code);
             Assert.Equal("gumcli check", failure.Stage);
@@ -78,7 +68,7 @@ public sealed class PreviewTests
     }
 
     [Fact]
-    public async Task AuthenticatedPreviewSerializesFailedGumCliCheckWithoutLeakingToUnauthorizedCaller()
+    public async Task PreviewSerializesFailedGumCliCheckWithoutLeakingTarget()
     {
         var data = Path.Combine(TempRoot, "preview-http-tool-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(data);
@@ -101,13 +91,6 @@ public sealed class PreviewTests
             await using var host = await PairingHost.StartAsync(0, localDataDirectory: data, previewToolRunner: FailingCheck);
             using var client = new HttpClient { BaseAddress = new Uri(host.Address.Replace("127.0.0.1", "localhost")) };
             var request = new { schemaVersion = new { major = 1, minor = 0 }, workspaceId = entry.id, snapshotId = id, targetHash = PreviewOperation.TargetHash(entry) };
-            var denied = await client.PostAsJsonAsync("/v1/previews", request);
-            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
-            Assert.DoesNotContain("gumcli", await denied.Content.ReadAsStringAsync());
-            var challenge = host.IssueChallengeForLocalConsent();
-            var pair = await client.PostAsJsonAsync("/v1/pair", new { challenge });
-            var token = (await pair.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString();
-            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             var response = await client.PostAsJsonAsync("/v1/previews", request);
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
             var text = await response.Content.ReadAsStringAsync();
@@ -116,8 +99,6 @@ public sealed class PreviewTests
             Assert.Equal("gumcli check", failure.GetProperty("stage").GetString());
             Assert.Contains("missing.gumx", failure.GetProperty("details").GetString(), StringComparison.OrdinalIgnoreCase);
             Assert.True(text.Length < 2500);
-            Assert.DoesNotContain(token!, text);
-            Assert.DoesNotContain(challenge, text);
             File.Delete(Path.Combine(Path.GetDirectoryName(Path.Combine(entry.root, entry.gumx))!, "ProjectCodeSettings.codsj"));
             var missingSettings = await client.PostAsJsonAsync("/v1/previews", new { request.schemaVersion, request.workspaceId, request.snapshotId, targetHash = PreviewOperation.TargetHash(entry) });
             Assert.Equal(HttpStatusCode.Conflict, missingSettings.StatusCode);

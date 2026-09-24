@@ -19,6 +19,6 @@ export function initialPanel() {
     selection: selectionPanel([]),
     mappings: 'Mapping editor and built-in catalog are unavailable in this shell. No target mappings can be validated offline yet.',
     preview: 'Preview requires a local bridge, a published snapshot and a configured workspace. Publish requires a local bridge and a selected export root. Neither action is available in this shell.',
-    connection: 'Offline — no workspace selected; not connected to a local bridge. Pairing and Sample workspace setup are not implemented yet.',
+    connection: 'Offline — no workspace selected; not connected to a local bridge. Start gumbridge serve locally, then reconnect.',
   };
 }
