@@ -23,12 +23,19 @@ function text(value: unknown): value is string {
 function validNode(value: unknown): boolean {
   if (!record(value)) return false;
   const required = ['id', 'parentId', 'type', 'name', 'x', 'y', 'width', 'height', 'visible'];
-  const optional = ['layoutMode', 'clipsContent', 'characters', 'fontSize', 'fontFamily', 'fontStyle', 'color', 'imageHash', 'scaleMode'];
+  const optional = ['layoutMode', 'clipsContent', 'characters', 'fontSize', 'fontFamily', 'fontStyle', 'color', 'imageHash', 'scaleMode',
+    'horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'];
   if (!required.every(key => Object.hasOwn(value, key)) || !Object.keys(value).every(key => [...required, ...optional].includes(key))) return false;
   if (!text(value.id) || !(value.parentId === null || text(value.parentId)) || !text(value.name) || typeof value.visible !== 'boolean' ||
       !['FRAME', 'TEXT', 'IMAGE'].includes(value.type as string) ||
       !['x', 'y', 'width', 'height'].every(key => typeof value[key] === 'number' && Number.isFinite(value[key]) && (key === 'x' || key === 'y' || (value[key] as number) >= 0))) return false;
   if (Object.hasOwn(value, 'color') && (typeof value.color !== 'string' || !/^#[0-9a-f]{6}$/.test(value.color))) return false;
+  for (const [key, allowed] of Object.entries({ horizontalSizing: ['FIXED', 'FILL'], verticalSizing: ['FIXED', 'FILL'],
+    horizontalAnchor: ['MIN', 'MAX', 'CENTER', 'STRETCH'], verticalAnchor: ['MIN', 'MAX', 'CENTER', 'STRETCH'] })) {
+    if (Object.hasOwn(value, key) && !allowed.includes(value[key] as string)) return false;
+  }
+  for (const key of ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'])
+    if (Object.hasOwn(value, key) && (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || (value[key] as number) < 0)) return false;
   switch (value.type) {
     case 'FRAME': return !['characters', 'fontSize', 'fontFamily', 'fontStyle', 'imageHash', 'scaleMode'].some(key => Object.hasOwn(value, key)) &&
       ['NONE', 'HORIZONTAL', 'VERTICAL'].includes(value.layoutMode as string) && typeof value.clipsContent === 'boolean';
@@ -72,7 +79,8 @@ export function validateContract(kind: string, value: unknown): boolean {
       text(value.snapshotId) && text(value.documentNamespace) &&
       textArray(value.selectedRootIds) && aliasesValid(value.rootAliases) &&
       (value.rootAliases as { rootId: string }[]).every(entry => (value.selectedRootIds as string[]).includes(entry.rootId)) &&
-      Array.isArray(value.nodes) && value.nodes.every(validNode);
+      Array.isArray(value.nodes) && value.nodes.every(validNode) && ((version.minor as number) >= 1 ||
+        value.nodes.every(node => record(node) && !['horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => Object.hasOwn(node, key))));
     case 'catalog': return text(value.catalogId) && text(value.revision) &&
       Array.isArray(value.controls) && value.controls.length === 0;
     case 'diagnostic': return text(value.code) && text(value.message) &&

@@ -32,6 +32,6 @@ public static class GumModelSerializer
 
     private static void AddVariable(XElement state, string name, string type, string value) =>
         state.Add(new XElement("Variable", new XElement("Type", type), new XElement("Name", name),
-            new XElement("Value", new XAttribute(Xsi + "type", "xsd:" + (type == "bool" ? "boolean" : type)), value),
+            new XElement("Value", new XAttribute(Xsi + "type", "xsd:" + (type == "bool" ? "boolean" : type == "float?" ? "float" : type is "DimensionUnitType" or "PositionUnitType" or "HorizontalAlignment" or "VerticalAlignment" ? "int" : type)), value),
             new XElement("SetsValue", "true")));
 }

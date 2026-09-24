@@ -22,6 +22,8 @@ export interface DesignNode {
   id: string; parentId: string | null; type: 'FRAME' | 'TEXT' | 'IMAGE'; name: string;
   x: number; y: number; width: number; height: number; visible: boolean;
   layoutMode?: string; clipsContent?: boolean; characters?: string; fontSize?: number; fontFamily?: string; fontStyle?: string; color?: string; imageHash?: string; scaleMode?: string;
+  horizontalSizing?: 'FILL'; verticalSizing?: 'FILL'; horizontalAnchor?: 'MAX' | 'CENTER' | 'STRETCH'; verticalAnchor?: 'MAX' | 'CENTER' | 'STRETCH';
+  minWidth?: number; maxWidth?: number; minHeight?: number; maxHeight?: number;
 }
 // JSON keys sorted recursively. Reject non-finite numbers before hashing; normalize -0 and CRLF.
 export function canonicalize(value: unknown): string {
@@ -129,17 +131,24 @@ export async function captureSelection(
       // The thin slice supports only plain Regular text; font style is captured on the node.
       if (node.fontWeight !== undefined && node.fontWeight !== 400) fail(node, 'fontWeight', 'Non-regular font weight is not captured');
     }
-    if (node.constraints && (node.constraints.horizontal !== 'MIN' || node.constraints.vertical !== 'MIN')) {
-      fail(node, 'constraints', 'Non-default constraints are not yet captured');
-    }
-    for (const property of ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const) {
-      if (node[property] != null) fail(node, property, 'Sizing limit is not yet captured');
+    for (const [axis, sizingKey, size] of [['horizontal', 'layoutSizingHorizontal', 'Width'], ['vertical', 'layoutSizingVertical', 'Height']] as const) {
+      const anchor = node.constraints?.[axis] ?? 'MIN';
+      const sizing = node[sizingKey] ?? 'FIXED';
+      if (!['MIN', 'MAX', 'CENTER', 'STRETCH'].includes(anchor)) fail(node, 'constraints', `Unsupported ${axis} anchor ${anchor}; use MIN, MAX, CENTER or STRETCH`);
+      // Figma FILL is only valid for auto-layout children (unsupported here).
+      // A plain-frame STRETCH constraint independently describes parent-relative size.
+      if (sizing !== 'FIXED') fail(node, sizingKey, `${axis} ${sizing} sizing requires auto layout; only plain-frame FIXED sizing and STRETCH constraints are supported`);
+      const min = node[`min${size}` as 'minWidth' | 'minHeight'];
+      const max = node[`max${size}` as 'maxWidth' | 'maxHeight'];
+      for (const [property, value] of [[`min${size}`, min], [`max${size}`, max]] as const)
+        if (value != null && (!Number.isFinite(value) || value < 0)) fail(node, property, 'Sizing limit must be finite and nonnegative');
+      if (min != null && max != null && min > max) fail(node, `min${size}`, 'Minimum exceeds maximum; correct sizing limits');
+      if (parentId === null && (anchor !== 'MIN' || sizing !== 'FIXED' || min != null || max != null))
+        fail(node, min != null ? `min${size}` : max != null ? `max${size}` : anchor !== 'MIN' ? 'constraints' : sizingKey,
+          'Export root requires fixed geometry; apply responsive sizing and limits to children');
     }
     for (const property of ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'] as const) {
       if (node[property] !== undefined && node[property] !== 0) fail(node, property, 'Layout spacing/padding is not yet captured');
-    }
-    for (const property of ['layoutSizingHorizontal', 'layoutSizingVertical'] as const) {
-      if (node[property] && node[property] !== 'FIXED') fail(node, property, 'Non-fixed sizing is not yet captured');
     }
     if (![node.x, node.y, node.width, node.height].every(Number.isFinite) || node.width < 0 || node.height < 0) {
       fail(node, 'bounds', 'Bounds must be finite and nonnegative in size'); return;
@@ -169,6 +178,9 @@ export async function captureSelection(
     if (node.type === 'RECTANGLE' && (fill.length !== 1 || fill[0].type !== 'IMAGE' || !fill[0].imageHash || !['FIT', 'FILL'].includes(fill[0].scaleMode ?? ''))) {
       fail(node, 'fills', 'Rectangle requires a FIT/FILL raster image'); return;
     }
+    if (node.type === 'RECTANGLE' && (node.constraints?.horizontal === 'STRETCH' || node.constraints?.vertical === 'STRETCH' ||
+      ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => node[key as keyof SourceNode] != null)))
+      fail(node, 'constraints', 'Responsive image dimensions and limits require verified FIT/FILL aspect-ratio rendering');
     if (node.type === 'RECTANGLE' && fill[0]?.imageTransform) fail(node, 'fills.imageTransform', 'Image crop/transform is not captured');
     if (node.type === 'TEXT' && (typeof node.fontSize !== 'number' || !Number.isFinite(node.fontSize) || node.fontSize <= 0 || typeof node.characters !== 'string' || !(typeof node.fontName === 'object' && node.fontName !== null && 'family' in node.fontName && 'style' in node.fontName && typeof node.fontName.family === 'string' && typeof node.fontName.style === 'string')))  {
       fail(node, 'text', 'Text requires uniform style and characters'); return;
@@ -181,6 +193,11 @@ export async function captureSelection(
       x: node.x, y: node.y, width: node.width, height: node.height, visible: node.visible,
       ...(color ? { color } : {}),
       ...(node.type === 'FRAME' ? { layoutMode: node.layoutMode ?? 'NONE', clipsContent: node.clipsContent ?? false } : {}),
+      ...(node.constraints?.horizontal === 'STRETCH' ? { horizontalSizing: 'FILL' as const } : {}),
+      ...(node.constraints?.vertical === 'STRETCH' ? { verticalSizing: 'FILL' as const } : {}),
+      ...(['MAX', 'CENTER', 'STRETCH'].includes(node.constraints?.horizontal ?? '') ? { horizontalAnchor: node.constraints!.horizontal as 'MAX' | 'CENTER' | 'STRETCH' } : {}),
+      ...(['MAX', 'CENTER', 'STRETCH'].includes(node.constraints?.vertical ?? '') ? { verticalAnchor: node.constraints!.vertical as 'MAX' | 'CENTER' | 'STRETCH' } : {}),
+      ...Object.fromEntries((['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const).filter(key => node[key] != null).map(key => [key, node[key]])),
       ...(node.type === 'TEXT' ? { characters: node.characters!, fontSize: node.fontSize as number, fontFamily: (node.fontName as { family: string }).family, fontStyle: (node.fontName as { style: string }).style } : {}),
       ...(node.type === 'RECTANGLE' && fill[0]?.imageHash ? { scaleMode: fill[0].scaleMode } : {}),
     };
@@ -218,5 +235,6 @@ export async function captureSelection(
   const selectedRootIds = selected.map(root => root.id);
   const rootAliases = roots.roots.filter(root => root.alias).sort((a, b) => a.id.localeCompare(b.id)).map(root => ({ rootId: root.id, alias: root.alias! }));
   const semantic = { documentNamespace, selectedRootIds, rootAliases, nodes };
-  return { snapshot: { schemaVersion: { major: 1, minor: 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
+  const responsive = nodes.some(node => ['horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => key in node));
+  return { snapshot: { schemaVersion: { major: 1, minor: responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
 }

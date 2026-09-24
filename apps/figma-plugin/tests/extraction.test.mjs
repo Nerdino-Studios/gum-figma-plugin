@@ -138,6 +138,28 @@ test('sizing constraints and min/max must not silently produce the same successf
   }
 });
 
+test('child fixed/fill anchors and limits retain semantics and reject incompatible combinations', async () => {
+  const api = { getImageByHash: () => null };
+  const child = { ...frame('panel', 'Panel'), x: 10, y: 20, width: 200, height: 100,
+    layoutSizingHorizontal: 'FIXED', constraints: { horizontal: 'STRETCH', vertical: 'MAX' }, minWidth: 150, maxWidth: 900 };
+  const result = await captureSelection([frame('root', 'Root', [child])], 'ns', api);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(validateContract('snapshot', result.snapshot), true);
+  assert.equal(result.snapshot.schemaVersion.minor, 1);
+  assert.equal(validateContract('snapshot', { ...result.snapshot, schemaVersion: { major: 1, minor: 0 } }), false);
+  assert.equal(result.snapshot.nodes[1].horizontalSizing, 'FILL');
+  assert.equal(result.snapshot.nodes[1].horizontalAnchor, 'STRETCH');
+  assert.equal(result.snapshot.nodes[1].verticalAnchor, 'MAX');
+  assert.equal(result.snapshot.nodes[1].maxWidth, 900);
+  const altered = await captureSelection([frame('root', 'Root', [{ ...child, maxWidth: 800 }])], 'ns', api);
+  assert.notEqual(result.snapshot.snapshotId, altered.snapshot.snapshotId);
+  for (const variant of [{ ...child, layoutSizingHorizontal: 'FILL' }, { ...child, minWidth: 1000 }, { ...child, layoutSizingHorizontal: 'HUG' }]) {
+    const invalid = await captureSelection([frame('root', 'Root', [variant])], 'ns', api);
+    assert.equal(invalid.snapshot, null);
+    assert.ok(invalid.diagnostics.some(d => /sizing|limit|minimum|FILL/i.test(d.message)));
+  }
+});
+
 test('budget never reads descendants beyond bounded depth or node count', async () => {
   const root = frame('root', 'Root');
   Object.defineProperty(root, 'children', { get() { throw Error('read outside depth budget'); } });
@@ -228,4 +250,28 @@ test('public alias changes hash without deriving alias from display name', async
   assert.deepEqual(renamed.snapshot.rootAliases, original.snapshot.rootAliases);
   assert.notEqual(original.snapshot.snapshotId, changed.snapshot.snapshotId);
   assert.equal(validateContract('snapshot', changed.snapshot), true);
+});
+
+test('plain frame stretch constraints lower to fill without pretending auto-layout FILL is supported', async () => {
+  const api = { getImageByHash: () => null };
+  const child = { ...frame('child', 'Child'), constraints: { horizontal: 'STRETCH', vertical: 'MAX' }, layoutSizingHorizontal: 'FIXED', minWidth: 40, maxWidth: 180 };
+  const result = await captureSelection([frame('root', 'Root', [child])], 'ns', api);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.snapshot.nodes[1].horizontalSizing, 'FILL');
+  assert.equal(result.snapshot.nodes[1].horizontalAnchor, 'STRETCH');
+  assert.equal(result.snapshot.nodes[1].maxWidth, 180);
+  const invalid = await captureSelection([frame('root', 'Root', [{ ...child, layoutSizingHorizontal: 'FILL' }])], 'ns', api);
+  assert.equal(invalid.snapshot, null);
+  assert.ok(invalid.diagnostics.some(d => d.property === 'layoutSizingHorizontal'));
+});
+
+test('responsive raster image blocks before a stretching Sprite can distort FIT/FILL', async () => {
+  const api = { getImageByHash: () => ({ getBytesAsync: async () => new Uint8Array([1]) }) };
+  const image = { id: 'image', name: 'Image', type: 'RECTANGLE', x: 0, y: 0, width: 64, height: 64, visible: true,
+    fills: [{ type: 'IMAGE', imageHash: 'h', scaleMode: 'FIT' }] };
+  for (const change of [{ constraints: { horizontal: 'STRETCH', vertical: 'MIN' } }, { maxWidth: 500 }, { minHeight: 20 }]) {
+    const result = await captureSelection([frame('root', 'Root', [{ ...image, ...change }])], 'ns', api);
+    assert.equal(result.snapshot, null);
+    assert.ok(result.diagnostics.some(d => d.nodeId === 'image' && /aspect-ratio/.test(d.message)));
+  }
 });

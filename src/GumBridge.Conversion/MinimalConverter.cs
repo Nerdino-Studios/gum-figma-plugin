@@ -13,7 +13,7 @@ public sealed record GumValue(string Name, string Type, string Value);
 public sealed record GumScreen(string Name, IReadOnlyList<GumElement> Elements);
 public sealed record ConversionResult(IReadOnlyList<GumScreen> Screens, IReadOnlyList<ConversionDiagnostic> Diagnostics);
 
-/// <summary>Pure lowering of the v1 fixed-size, unrotated minimal subset. All other semantic layouts block output.</summary>
+/// <summary>Pure lowering of the v1 unrotated subset; unsupported layout combinations block output.</summary>
 public static class MinimalConverter
 {
     public static ConversionResult Convert(JsonElement snapshot, IReadOnlyDictionary<string, (double Width, double Height)>? imageDimensions = null)
@@ -69,6 +69,8 @@ public static class MinimalConverter
                 errors.Add(new("MISSING_FONT", id, "Minimal sample supports pinned Arial Regular 24 only; configure a verified font mapping"));
             if (type == "IMAGE")
             {
+                if (Property(node, "horizontalSizing", "FIXED") != "FIXED" || Property(node, "verticalSizing", "FIXED") != "FIXED" || HasLimit(node))
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Responsive image dimensions and limits require verified FIT/FILL aspect-ratio rendering"));
                 var hash = node.GetProperty("imageHash").GetString()!;
                 var width = node.GetProperty("width").GetDouble();
                 var height = node.GetProperty("height").GetDouble();
@@ -76,6 +78,24 @@ public static class MinimalConverter
                     !double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width <= 0 || size.Height <= 0 ||
                     width <= 0 || height <= 0 || Math.Abs(width / height - size.Width / size.Height) > 0.000001)
                     errors.Add(new("UNSUPPORTED_FEATURE", id, "FIT/FILL requires verified source image dimensions and matching aspect ratio; cropping and letterboxing are not yet supported"));
+            }
+            foreach (var axis in new[] { (Size: "Width", Position: "X", ParentSize: "width", Anchor: "horizontalAnchor", Sizing: "horizontalSizing"),
+                (Size: "Height", Position: "Y", ParentSize: "height", Anchor: "verticalAnchor", Sizing: "verticalSizing") })
+            {
+                var sizing = Property(node, axis.Sizing, "FIXED");
+                var anchor = Property(node, axis.Anchor, "MIN");
+                if (id == roots.FirstOrDefault() && (sizing != "FIXED" || anchor != "MIN" || HasLimit(node)))
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Export root sizing, anchoring and limits require a viewport mapping; use fixed root geometry"));
+                if (sizing == "FILL" && anchor != "STRETCH" || sizing == "FIXED" && anchor == "STRETCH")
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, $"{axis.Sizing} and {axis.Anchor} must pair FILL with STRETCH; change sizing or constraint"));
+                if (parentId is not null && byId.TryGetValue(parentId, out var sizingParent) && sizingParent.GetProperty("type").GetString() == "FRAME" &&
+                    (sizing == "FILL" || anchor != "MIN") && sizingParent.GetProperty("layoutMode").GetString() != "NONE")
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Responsive anchors inside auto layout require layout lowering first"));
+                var min = Limit(node, "min" + axis.Size);
+                var max = Limit(node, "max" + axis.Size);
+                if (min > max) errors.Add(new("UNSUPPORTED_FEATURE", id, $"min{axis.Size} exceeds max{axis.Size}; correct sizing limits"));
+                if (new[] { "min" + axis.Size, "max" + axis.Size }.Any(key => node.TryGetProperty(key, out var limit) && limit.GetDouble() > float.MaxValue))
+                    errors.Add(new("INVALID_SNAPSHOT", id, $"{axis.Size} limit exceeds native Gum float range"));
             }
             if (id == roots.FirstOrDefault())
             {
@@ -86,8 +106,8 @@ public static class MinimalConverter
             var name = names[id];
             var parentName = parentId == roots.FirstOrDefault() ? null : parentId is not null && names.TryGetValue(parentId, out var resolved) ? resolved : null;
             if (type == "FRAME" && node.TryGetProperty("color", out var color))
-                elements.Add(Visual(name + "_Background", "Rectangle", parentName, node.GetProperty("visible").GetBoolean(), node, color.GetString()!));
-            var values = Geometry(node);
+                elements.Add(Visual(name + "_Background", "Rectangle", parentName, node.GetProperty("visible").GetBoolean(), node, color.GetString()!, parentId is not null && byId.TryGetValue(parentId, out var visualParent) ? visualParent : null));
+            var values = Geometry(node, parentId is not null && byId.TryGetValue(parentId, out var geometryParent) ? geometryParent : null);
             if (type == "TEXT")
             {
                 values.Add(new("Text", "string", node.GetProperty("characters").GetString()!));
@@ -106,9 +126,9 @@ public static class MinimalConverter
         return new([new(aliases[roots[0]], elements)], []);
     }
 
-    private static GumElement Visual(string name, string type, string? parent, bool visible, JsonElement node, string color, bool screenOrigin = false)
+    private static GumElement Visual(string name, string type, string? parent, bool visible, JsonElement node, string color, JsonElement? geometryParent = null, bool screenOrigin = false)
     {
-        var values = Geometry(node);
+        var values = Geometry(node, geometryParent);
         if (screenOrigin)
         {
             values[0] = new("X", "float", "0");
@@ -121,14 +141,42 @@ public static class MinimalConverter
         return new(name, type, parent, visible, values);
     }
 
-    private static List<GumValue> Geometry(JsonElement node)
+    private static string Property(JsonElement node, string key, string fallback) =>
+        node.TryGetProperty(key, out var value) ? value.GetString()! : fallback;
+
+    private static double Limit(JsonElement node, string key) => node.TryGetProperty(key, out var value) ? value.GetDouble() : key.StartsWith("min", StringComparison.Ordinal) ? 0 : double.PositiveInfinity;
+    private static bool HasLimit(JsonElement node) => new[] { "minWidth", "maxWidth", "minHeight", "maxHeight" }.Any(key => node.TryGetProperty(key, out _));
+    private static string Number(double n) => (n == 0 ? 0 : n).ToString("R", CultureInfo.InvariantCulture);
+
+    private static List<GumValue> Geometry(JsonElement node, JsonElement? parent = null)
     {
         var result = new List<GumValue>();
-        foreach (var key in new[] { "X", "Y", "Width", "Height" })
+        foreach (var (position, size, anchorKey, sizingKey, parentKey, endUnit, centerUnit, origin) in new[] {
+            ("X", "Width", "horizontalAnchor", "horizontalSizing", "width", "4", "6", "XOrigin"),
+            ("Y", "Height", "verticalAnchor", "verticalSizing", "height", "5", "7", "YOrigin") })
         {
-            var n = node.GetProperty(key.ToLowerInvariant()).GetDouble();
-            result.Add(new(key, "float", (n == 0 ? 0 : n).ToString("R", CultureInfo.InvariantCulture)));
+            var n = node.GetProperty(position.ToLowerInvariant()).GetDouble();
+            var extent = node.GetProperty(size.ToLowerInvariant()).GetDouble();
+            var anchor = Property(node, anchorKey, "MIN");
+            var sizing = Property(node, sizingKey, "FIXED");
+            var parentExtent = parent?.GetProperty(parentKey).GetDouble() ?? 0;
+            if (anchor == "MAX") n += extent - parentExtent;
+            if (anchor == "CENTER") n = n + extent / 2 - parentExtent / 2;
+            result.Add(new(position, "float", Number(n)));
+            if (anchor == "MAX" || anchor == "CENTER")
+            {
+                result.Add(new(origin, origin == "XOrigin" ? "HorizontalAlignment" : "VerticalAlignment", anchor == "MAX" ? "2" : "1"));
+                result.Add(new(position + "Units", "PositionUnitType", anchor == "MAX" ? endUnit : centerUnit));
+            }
+            var dimension = sizing == "FILL" ? extent - parentExtent : extent;
+            result.Add(new(size, "float", Number(dimension)));
+            if (sizing == "FILL") result.Add(new(size + "Units", "DimensionUnitType", "2"));
+            foreach (var prefix in new[] { "min", "max" })
+                if (node.TryGetProperty(prefix + size, out var limit))
+                    result.Add(new(char.ToUpperInvariant(prefix[0]) + prefix[1..] + size, "float?", Number(limit.GetDouble())));
         }
-        return result;
+        // Preserve the existing fixed-geometry variable order for byte-identical golden output.
+        var order = new[] { "X", "Y", "Width", "Height" };
+        return result.OrderBy(v => Array.IndexOf(order, v.Name) is var index && index >= 0 ? index : order.Length).ToList();
     }
 }

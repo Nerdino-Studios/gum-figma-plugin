@@ -39,7 +39,8 @@ public static class WireContracts
                 diagnostics.ValueKind == JsonValueKind.Array && diagnostics.GetArrayLength() > 0 && diagnostics.EnumerateArray().All(d => Validate("diagnostic", d) &&
                     d.GetProperty("severity").GetString() == "error" && d.GetProperty("code").GetString() == "UNSUPPORTED_FEATURE")) &&
                 Text(value.GetProperty("snapshotId")) && Text(value.GetProperty("documentNamespace")) &&
-                TextArray(value.GetProperty("selectedRootIds")) && ValidAliases(value.GetProperty("rootAliases"), value.GetProperty("selectedRootIds")) && NodeArray(value.GetProperty("nodes")),
+                TextArray(value.GetProperty("selectedRootIds")) && ValidAliases(value.GetProperty("rootAliases"), value.GetProperty("selectedRootIds")) && NodeArray(value.GetProperty("nodes")) &&
+                (version.GetProperty("minor").GetInt32() >= 1 || !value.GetProperty("nodes").EnumerateArray().Any(HasResponsiveFields)),
             "catalog" => Text(value.GetProperty("catalogId")) && Text(value.GetProperty("revision")) &&
                 EmptyArray(value.GetProperty("controls")),
             "diagnostic" => Text(value.GetProperty("code")) && Text(value.GetProperty("message")) &&
@@ -66,11 +67,13 @@ public static class WireContracts
             roots.EnumerateArray().Any(root => root.GetString() == id.GetString())) &&
         aliases.EnumerateArray().Select(entry => entry.GetProperty("rootId").GetString()).Distinct().Count() == aliases.GetArrayLength();
 
+    private static bool HasResponsiveFields(JsonElement node) => new[] { "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight" }.Any(key => node.TryGetProperty(key, out _));
+
     private static bool ValidNode(JsonElement node)
     {
         if (node.ValueKind != JsonValueKind.Object) return false;
         string[] required = ["id", "parentId", "type", "name", "x", "y", "width", "height", "visible"];
-        string[] optional = ["layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "imageHash", "scaleMode"];
+        string[] optional = ["layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "imageHash", "scaleMode", "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight"];
         if (!required.All(key => node.TryGetProperty(key, out _)) ||
             node.EnumerateObject().Any(p => !required.Contains(p.Name) && !optional.Contains(p.Name)) ||
             !Text(node.GetProperty("id")) || !Text(node.GetProperty("name")) ||
@@ -79,6 +82,11 @@ public static class WireContracts
             !new[] { "x", "y", "width", "height" }.All(key => node.GetProperty(key).ValueKind == JsonValueKind.Number &&
                 node.GetProperty(key).TryGetDouble(out var n) && double.IsFinite(n) &&
                 (key is "x" or "y" || n >= 0))) return false;
+        foreach (var (key, allowed) in new[] { ("horizontalSizing", new[] { "FIXED", "FILL" }), ("verticalSizing", new[] { "FIXED", "FILL" }),
+            ("horizontalAnchor", new[] { "MIN", "MAX", "CENTER", "STRETCH" }), ("verticalAnchor", new[] { "MIN", "MAX", "CENTER", "STRETCH" }) })
+            if (node.TryGetProperty(key, out var value) && (value.ValueKind != JsonValueKind.String || !allowed.Contains(value.GetString()))) return false;
+        foreach (var key in new[] { "minWidth", "maxWidth", "minHeight", "maxHeight" })
+            if (node.TryGetProperty(key, out var value) && (value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var n) || !double.IsFinite(n) || n < 0)) return false;
         bool Has(string key) => node.TryGetProperty(key, out _);
         bool Absent(params string[] keys) => keys.All(key => !Has(key));
         bool TextProperty(string key) => Has(key) && Text(node.GetProperty(key));
