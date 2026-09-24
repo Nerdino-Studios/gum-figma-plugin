@@ -910,5 +910,18 @@
       "selectedRootIds": ["root"], "rootAliases": [],
       "nodes": [{ "id": "root", "parentId": null, "type": "FRAME", "name": "Root", "x": 0, "y": 0, "width": 1, "height": 1, "visible": true,
         "layoutMode": "NONE", "clipsContent": false,
-        "fallback": { "feature": "effects/strokes", "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] } }
+        "fallback": { "feature": "effects/strokes", "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }] } },
+  { "name": "v1.4 canonical root mapping", "kind": "snapshot", "valid": true,
+    "value": { "schemaVersion": { "major": 1, "minor": 4 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
+      "rootMappings": [{ "rootId": "root", "mode": "generate", "catalogId": "gumbridge.builtin", "revision": "1.0", "controlId": "native.frame" }],
+      "nodes": [{ "id": "root", "parentId": null, "type": "FRAME", "name": "Root", "x": 0, "y": 0, "width": 1, "height": 1, "visible": true, "layoutMode": "NONE", "clipsContent": false }] } },
+  { "name": "old version cannot carry root mapping", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 3 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
+      "rootMappings": [{ "rootId": "root", "mode": "generate", "catalogId": "gumbridge.builtin", "revision": "1.0", "controlId": "native.frame" }], "nodes": [] } },
+  { "name": "unverified control mapping", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 4 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
+      "rootMappings": [{ "rootId": "root", "mode": "generate", "catalogId": "gumbridge.builtin", "revision": "1.0", "controlId": "forms.button" }], "nodes": [] } }
 ]

@@ -48,6 +48,9 @@ test('selection changes immediately label a visible successful preview stale', a
     Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined });
     await find(content, 'Render published snapshot in Gum').listeners.click();
     assert.match(content.textContent, /ready/);
+    listeners.message({ data: { pluginMessage: { type: 'mapping-saved', alias: 'RenamedAlias' } } });
+    assert.match(content.textContent, /Mapping changed.*republish/);
+    assert.match(content.children.find(child => child.tag === 'p').textContent, /Stale.*Snapshot/);
     globalThis.previewOutputHash = 'sha256:' + '0'.repeat(64);
     await find(content, 'Render published snapshot in Gum').listeners.click();
     assert.match(content.textContent, /Preview unavailable: Preview PNG output hash mismatch/);

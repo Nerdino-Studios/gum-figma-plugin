@@ -14,7 +14,7 @@ class Element {
 const find = (element, text) => element.children.find(child => child.textContent === text);
 
 let panelCount = 0;
-async function panel(cryptoValue) {
+async function panel(cryptoValue, offline = false) {
   const navigation = new Element();
   const content = new Element();
   const messages = [];
@@ -26,13 +26,15 @@ async function panel(cryptoValue) {
   const compiled = await build({ entryPoints: ['src/ui/index.ts'], absWorkingDir: new URL('../', import.meta.url).pathname,
     bundle: true, write: false, format: 'esm', platform: 'browser', plugins: [{ name: 'bridge-fake', setup(builder) {
       builder.onResolve({ filter: /bridge-client/ }, () => ({ path: 'bridge', namespace: 'fake' }));
-      builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: 'export class BridgeClient { async workspaces() { return { workspaces: [{ id: "workspace", label: "Sample" }] }; } }', loader: 'js' }));
+      builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: offline
+        ? 'export class BridgeClient { async workspaces() { throw new Error("offline"); } }'
+        : 'export class BridgeClient { async workspaces() { return { workspaces: [{ id: "workspace", label: "Sample" }] }; } }', loader: 'js' }));
     } }] });
   await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64') + '#' + ++panelCount);
   find(navigation, 'Connection').listeners.click();
   await new Promise(resolve => setTimeout(resolve, 0));
-  find(navigation, 'Preview and changes').listeners.click();
-  return { content, messages, receive: pluginMessage => listeners.message({ data: { pluginMessage } }) };
+  find(navigation, offline ? 'Mappings' : 'Preview and changes').listeners.click();
+  return { content, messages, receive: pluginMessage => listeners.message({ data: { pluginMessage } }), navigation };
 }
 
 test('iframe without randomUUID creates distinct path-free namespace and preserves known design continuation and capture', async () => {
@@ -54,6 +56,21 @@ test('iframe without randomUUID creates distinct path-free namespace and preserv
   alias.value = 'MainMenu';
   find(ui.content, 'Capture selection and publish').listeners.click();
   assert.deepEqual(ui.messages.at(-1), { type: 'capture-publication', namespace: first.namespace, alias: 'MainMenu' });
+});
+
+test('offline blank-document mapping panel associates namespace and saves stable alias without workspace', async () => {
+  const ui = await panel({ getRandomValues: bytes => { bytes.fill(1); return bytes; } }, true);
+  ui.receive({ type: 'namespace-association', retained: null });
+  assert.match(ui.content.textContent, /offline catalog/);
+  find(ui.content, 'New design namespace').listeners.click();
+  const namespace = ui.messages.at(-1).namespace;
+  ui.receive({ type: 'namespace-associated', namespace });
+  ui.receive({ type: 'mapping-state', selectedIds: ['1:2'], mappings: [], diagnostics: [] });
+  const alias = ui.content.children.find(child => child.tag === 'input' && child.placeholder === 'Public alias');
+  alias.value = 'MainMenu';
+  find(ui.content, 'Save mapping').listeners.click();
+  assert.deepEqual(ui.messages.at(-1), { type: 'save-mapping', alias: 'MainMenu', controlId: 'native.frame' });
+  assert.equal(ui.content.children.some(child => child.textContent === 'Capture selection and publish'), false);
 });
 
 test('iframe without a suitable random source reports failure instead of posting an invalid namespace', async () => {

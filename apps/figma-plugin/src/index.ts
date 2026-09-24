@@ -1,6 +1,7 @@
 import { retainedNamespace, associateNamespace } from './document/namespace.ts';
 import { readSelection } from './document/selection.ts';
 import { captureCurrentSelection, captureSelection, type SourceNode } from './document/extraction.ts';
+import { builtinCatalog, loadMappings, saveMapping, aliasesForSelection, resolveMapping } from './document/mappings.ts';
 
 figma.showUI(__html__, { width: 420, height: 560, themeColors: true });
 figma.ui.postMessage(readSelection());
@@ -35,6 +36,31 @@ figma.on('currentpagechange', () => {
   figma.ui.postMessage({ type: 'source-changed' });
 });
 figma.ui.onmessage = async (message: unknown) => {
+  if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'read-mappings') {
+    try {
+      if (!metadataAvailable || !associated || retainedNamespace(figma.root) !== associated) throw new Error('Associate this design to read mappings');
+      const mappings = loadMappings(figma.root, associated);
+      figma.ui.postMessage({ type: 'mapping-state', catalog: builtinCatalog, mappings,
+        selectedIds: figma.currentPage.selection.map(node => node.id), diagnostics: mappings.flatMap(m => resolveMapping(m, builtinCatalog)) });
+    } catch (error) { figma.ui.postMessage({ type: 'mapping-error', message: error instanceof Error ? error.message : 'Mappings unavailable' }); }
+    return;
+  }
+  if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'save-mapping') {
+    try {
+      if (!metadataAvailable || !associated || retainedNamespace(figma.root) !== associated) throw new Error('Associate this design before mapping');
+      const selected = figma.currentPage.selection;
+      if (selected.length !== 1 || selected[0].type !== 'FRAME') throw new Error('Select one frame to map');
+      if (!('alias' in message) || typeof message.alias !== 'string' || !('controlId' in message) || typeof message.controlId !== 'string') throw new Error('Invalid mapping request');
+      const entry = { alias: message.alias, mode: 'generate' as const, catalogId: builtinCatalog.catalogId,
+        revision: builtinCatalog.revision, controlId: message.controlId };
+      if (entry.controlId !== 'native.frame') throw new Error('INVALID_CONTROL_CONTRACT: selected FRAME requires native.frame; child text/images follow extraction rules');
+      const errors = resolveMapping({ ...entry, nodeId: selected[0].id }, builtinCatalog);
+      if (errors.length) throw new Error(errors.join('; '));
+      saveMapping(figma.root, associated, selected[0].id, entry);
+      figma.ui.postMessage({ type: 'mapping-saved', alias: entry.alias });
+    } catch (error) { figma.ui.postMessage({ type: 'mapping-error', message: error instanceof Error ? error.message : 'Mapping failed' }); }
+    return;
+  }
   if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'associate-namespace' &&
       'mode' in message && (message.mode === 'new' || message.mode === 'continue') &&
       'namespace' in message && typeof message.namespace === 'string') {
@@ -73,8 +99,16 @@ figma.ui.onmessage = async (message: unknown) => {
     if (!associated || associated !== message.namespace || retainedNamespace(figma.root) !== associated)
       throw new Error('Choose New design namespace or Continue known design before capture');
     const selected = figma.currentPage.selection;
-    const aliases = selected.length === 1 ? { [selected[0].id]: message.alias } : {};
-    const result = await captureSelection(figma.currentPage.selection as unknown as SourceNode[], message.namespace, figma, {}, aliases, approvals());
+    const mappings = loadMappings(figma.root, associated);
+    const aliases = aliasesForSelection(mappings, selected.map(node => node.id));
+    if (selected.length !== 1 || aliases[selected[0].id] !== message.alias) throw new Error('Save the public alias in Mappings before publishing');
+    const mismatch = mappings.filter(m => selected.some(node => node.id === m.nodeId)).flatMap(m => resolveMapping(m, builtinCatalog));
+    if (mismatch.length) throw new Error(mismatch.join('; '));
+    if (mappings.some(m => selected.some(node => node.id === m.nodeId) && m.controlId !== 'native.frame'))
+      throw new Error('INVALID_CONTROL_CONTRACT: a selected FRAME must map to native.frame');
+    const rootMappings = mappings.filter(m => selected.some(node => node.id === m.nodeId)).map(m => ({
+      rootId: m.nodeId, mode: 'generate' as const, catalogId: m.catalogId, revision: m.revision, controlId: 'native.frame' as const }));
+    const result = await captureSelection(figma.currentPage.selection as unknown as SourceNode[], message.namespace, figma, {}, aliases, approvals(), rootMappings);
     figma.ui.postMessage({ type: 'capture-result', result });
   } catch (error) {
     figma.ui.postMessage({ type: 'capture-result', result: { snapshot: null, assets: [], diagnostics: [

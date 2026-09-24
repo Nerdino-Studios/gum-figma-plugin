@@ -25,7 +25,7 @@ public static class WireContracts
         };
         if (required is null || value.ValueKind != JsonValueKind.Object ||
             !required.All(key => value.TryGetProperty(key, out _)) ||
-            value.EnumerateObject().Any(p => p.Name != "schemaVersion" && p.Name != "extensions" && !(kind == "snapshot" && p.Name == "extractionDiagnostics") && !required.Contains(p.Name)) ||
+            value.EnumerateObject().Any(p => p.Name != "schemaVersion" && p.Name != "extensions" && !(kind == "snapshot" && (p.Name == "extractionDiagnostics" || p.Name == "rootMappings")) && !required.Contains(p.Name)) ||
             !value.TryGetProperty("schemaVersion", out var version) || !ValidVersion(version)) return false;
 
         if (value.TryGetProperty("extensions", out var extensions) &&
@@ -40,6 +40,7 @@ public static class WireContracts
                     d.GetProperty("severity").GetString() == "error" && d.GetProperty("code").GetString() == "UNSUPPORTED_FEATURE")) &&
                 Text(value.GetProperty("snapshotId")) && Text(value.GetProperty("documentNamespace")) &&
                 TextArray(value.GetProperty("selectedRootIds")) && ValidAliases(value.GetProperty("rootAliases"), value.GetProperty("selectedRootIds")) && NodeArray(value.GetProperty("nodes")) &&
+                (!value.TryGetProperty("rootMappings", out var mappings) || version.GetProperty("minor").GetInt32() >= 4 && ValidRootMappings(mappings, value.GetProperty("selectedRootIds"), value.GetProperty("rootAliases"))) &&
                 (version.GetProperty("minor").GetInt32() >= 1 || !value.GetProperty("nodes").EnumerateArray().Any(HasResponsiveFields)) &&
                 (version.GetProperty("minor").GetInt32() >= 2 || !value.GetProperty("nodes").EnumerateArray().Any(HasLayoutFields)) &&
                 (version.GetProperty("minor").GetInt32() >= 3 || !value.GetProperty("nodes").EnumerateArray().Any(n => n.TryGetProperty("rotation", out _) || n.TryGetProperty("imageTransform", out _) || n.TryGetProperty("fallback", out _))),
@@ -68,6 +69,17 @@ public static class WireContracts
             entry.TryGetProperty("alias", out var alias) && Text(alias) &&
             roots.EnumerateArray().Any(root => root.GetString() == id.GetString())) &&
         aliases.EnumerateArray().Select(entry => entry.GetProperty("rootId").GetString()).Distinct().Count() == aliases.GetArrayLength();
+
+    private static bool ValidRootMappings(JsonElement mappings, JsonElement roots, JsonElement aliases) =>
+        mappings.ValueKind == JsonValueKind.Array && mappings.GetArrayLength() == roots.GetArrayLength() &&
+        mappings.EnumerateArray().All(m => m.ValueKind == JsonValueKind.Object && m.EnumerateObject().Count() == 5 &&
+            m.TryGetProperty("rootId", out var rootId) && Text(rootId) && roots.EnumerateArray().Any(r => r.GetString() == rootId.GetString()) &&
+            aliases.EnumerateArray().Any(a => a.GetProperty("rootId").GetString() == rootId.GetString()) &&
+            m.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "generate" &&
+            m.TryGetProperty("catalogId", out var catalogId) && catalogId.ValueKind == JsonValueKind.String && catalogId.GetString() == "gumbridge.builtin" &&
+            m.TryGetProperty("revision", out var revision) && revision.ValueKind == JsonValueKind.String && revision.GetString() == "1.0" &&
+            m.TryGetProperty("controlId", out var controlId) && controlId.ValueKind == JsonValueKind.String && controlId.GetString() == "native.frame") &&
+        mappings.EnumerateArray().Select(m => m.GetProperty("rootId").GetString()).Distinct().Count() == mappings.GetArrayLength();
 
     private static bool HasResponsiveFields(JsonElement node) => new[] { "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight" }.Any(key => node.TryGetProperty(key, out _));
 

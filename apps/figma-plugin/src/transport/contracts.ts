@@ -64,6 +64,15 @@ function aliasesValid(value: unknown): boolean {
     new Set(value.map(entry => entry.rootId)).size === value.length;
 }
 
+function rootMappingsValid(value: unknown, roots: unknown, aliases: unknown): boolean {
+  return Array.isArray(value) && Array.isArray(roots) && Array.isArray(aliases) && value.length === roots.length &&
+    value.every(entry => record(entry) && exact(entry, ['rootId', 'mode', 'catalogId', 'revision', 'controlId']) &&
+      text(entry.rootId) && roots.includes(entry.rootId) && entry.mode === 'generate' &&
+      entry.catalogId === 'gumbridge.builtin' && entry.revision === '1.0' && entry.controlId === 'native.frame' &&
+      aliases.some(alias => record(alias) && alias.rootId === entry.rootId)) &&
+    new Set(value.map(entry => entry.rootId)).size === value.length;
+}
+
 function textArray(value: unknown): boolean {
   return Array.isArray(value) && value.every(text);
 }
@@ -71,7 +80,7 @@ function textArray(value: unknown): boolean {
 export function validateContract(kind: string, value: unknown): boolean {
   if (!Object.hasOwn(fields, kind) || !record(value)) return false;
   const required = fields[kind as ContractKind];
-  const allowed = ['schemaVersion', ...required, 'extensions', ...(kind === 'snapshot' ? ['extractionDiagnostics'] : [])];
+  const allowed = ['schemaVersion', ...required, 'extensions', ...(kind === 'snapshot' ? ['extractionDiagnostics', 'rootMappings'] : [])];
   if (!required.every(key => Object.hasOwn(value, key)) || !Object.keys(value).every(key => allowed.includes(key))) return false;
 
   const version = value.schemaVersion;
@@ -90,6 +99,7 @@ export function validateContract(kind: string, value: unknown): boolean {
       value.extractionDiagnostics.every(d => validateContract('diagnostic', d) && d.severity === 'error' && d.code === 'UNSUPPORTED_FEATURE')) &&
       text(value.snapshotId) && text(value.documentNamespace) &&
       textArray(value.selectedRootIds) && aliasesValid(value.rootAliases) &&
+      (!Object.hasOwn(value, 'rootMappings') || (version.minor as number) >= 4 && rootMappingsValid(value.rootMappings, value.selectedRootIds, value.rootAliases)) &&
       (value.rootAliases as { rootId: string }[]).every(entry => (value.selectedRootIds as string[]).includes(entry.rootId)) &&
       Array.isArray(value.nodes) && value.nodes.every(validNode) && ((version.minor as number) >= 1 ||
         value.nodes.every(node => record(node) && !['horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => Object.hasOwn(node, key)))) &&

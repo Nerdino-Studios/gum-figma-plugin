@@ -387,6 +387,21 @@
         "extensions": {
           "$ref": "#/$defs/extensions"
         },
+        "rootMappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rootId", "mode", "catalogId", "revision", "controlId"],
+            "additionalProperties": false,
+            "properties": {
+              "rootId": { "$ref": "#/$defs/text" },
+              "mode": { "const": "generate" },
+              "catalogId": { "const": "gumbridge.builtin" },
+              "revision": { "const": "1.0" },
+              "controlId": { "const": "native.frame" }
+            }
+          }
+        },
         "rootAliases": {
           "type": "array",
           "items": {

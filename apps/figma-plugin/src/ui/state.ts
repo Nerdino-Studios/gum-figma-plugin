@@ -17,7 +17,7 @@ export function initialPanel() {
   return {
     tabs,
     selection: selectionPanel([]),
-    mappings: 'Mapping editor and built-in catalog are unavailable in this shell. No target mappings can be validated offline yet.',
+    mappings: 'Built-in offline catalog available. Associate a namespace and select a frame to save a stable public alias. Target-specific mappings require a resolved project catalog.',
     preview: 'Preview requires a local bridge, a published snapshot and a configured workspace. Publish requires a local bridge and a selected export root. Neither action is available in this shell.',
     connection: 'Offline — no workspace selected; not connected to a local bridge. Start gumbridge serve locally, then reconnect.',
   };

@@ -8,7 +8,8 @@ test('blank document without bridge or workspace has useful offline views', () =
   assert.match(panel.selection, /select a frame/i);
   assert.match(panel.selection, /create a design/i);
   assert.match(panel.selection, /create sample design.*unavailable/i);
-  assert.match(panel.mappings, /catalog.*unavailable/i);
+  assert.match(panel.mappings, /built-in offline catalog available/i);
+  assert.match(panel.mappings, /target-specific mappings require a resolved project catalog/i);
   assert.match(panel.preview, /preview.*local bridge/i);
   assert.match(panel.preview, /publish.*local bridge/i);
   assert.match(panel.connection, /offline.*no workspace/i);

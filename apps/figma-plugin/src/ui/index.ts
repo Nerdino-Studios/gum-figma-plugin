@@ -2,6 +2,7 @@ import { initialPanel, selectionPanel, type ViewKey } from './state';
 import { isSceneToUi } from '../transport/messages';
 import { BridgeClient, type Workspace } from '../transport/bridge-client';
 import { hashBytes } from '../hash';
+import { builtinCatalog } from '../document/mappings';
 
 const bridge = new BridgeClient();
 let connectionStatus = 'Connecting to local Gum bridge…';
@@ -33,6 +34,8 @@ let associated = false;
 let setupRequired = false;
 let busy = false;
 let alias = '';
+let mappingStatus = 'Associate a design namespace to edit mappings.';
+let selectedIds: string[] = [];
 let publicationStatus = 'Unpublished — select a frame and workspace, then capture and publish.';
 let publishedId: string | undefined;
 let previewUrl: string | undefined;
@@ -61,6 +64,36 @@ function render(): void {
   }
   content.textContent = setupRequired ? publicationStatus : active === 'connection' ? connectionStatus : active === 'preview' ? publicationStatus : panel[active];
   if (setupRequired) return;
+  if (active === 'mappings') {
+    const intro = document.createElement('p');
+    intro.textContent = `${builtinCatalog.catalogId}@${builtinCatalog.revision} (offline). ${mappingStatus}`;
+    content.append(intro);
+    for (const control of builtinCatalog.controls) {
+      const item = document.createElement('p');
+      item.textContent = `${control.label}: ${control.available ? `available (${control.properties.join(', ')})` : 'adapter pending; unavailable'}`;
+      content.append(item);
+    }
+    if (associated && selectedIds.length === 1) {
+      const name = document.createElement('input');
+      name.setAttribute('aria-label', 'Stable public alias');
+      name.placeholder = 'Public alias'; name.value = alias;
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', 'Catalog control');
+      for (const control of builtinCatalog.controls) {
+        const option = document.createElement('option');
+        option.value = control.id; option.textContent = control.label; option.disabled = control.id !== 'native.frame';
+        select.append(option);
+      }
+      select.value = 'native.frame';
+      const save = document.createElement('button');
+      save.textContent = 'Save mapping';
+      save.addEventListener('click', () => {
+        alias = name.value.trim();
+        parent.postMessage({ pluginMessage: { type: 'save-mapping', alias, controlId: select.value } }, '*');
+      });
+      content.append(name, select, save);
+    }
+  }
   if (active === 'preview' && fallbackCandidate) {
     const approval = document.createElement('button');
     approval.textContent = `Approve decorative PNG fallback for ${fallbackCandidate.nodeId} (loses editability and resolution independence)`;
@@ -79,8 +112,8 @@ function render(): void {
     image.src = previewUrl; image.alt = 'Native Gum staged preview'; image.style.maxWidth = '100%';
     content.append(identity, image);
   }
-  if (active === 'preview' && workspaceId) {
-    if (publishedId) {
+  if (active === 'preview' || active === 'mappings') {
+    if (active === 'preview' && workspaceId && publishedId) {
       const preview = document.createElement('button');
       preview.textContent = 'Render published snapshot in Gum';
       preview.disabled = busy;
@@ -136,6 +169,7 @@ function render(): void {
       content.append(note, newButton, continueButton);
       return;
     }
+    if (active === 'mappings' || !workspaceId) return;
     const identity = document.createElement('input');
     identity.setAttribute('aria-label', 'Associated design namespace');
     identity.readOnly = true;
@@ -198,6 +232,21 @@ window.addEventListener('message', event => {
   // Figma forwards scene messages under pluginMessage. No commands are accepted from this iframe.
   const message: unknown = event.data?.pluginMessage;
   if (typeof message === 'object' && message !== null && 'type' in message) {
+    if (message.type === 'mapping-state' && 'mappings' in message && Array.isArray(message.mappings) &&
+        'selectedIds' in message && Array.isArray(message.selectedIds)) {
+      selectedIds = message.selectedIds.filter((id): id is string => typeof id === 'string');
+      const entry = message.mappings.find((item: { nodeId?: string }) => item.nodeId === selectedIds[0]);
+      alias = typeof entry?.alias === 'string' ? entry.alias : '';
+      mappingStatus = `Selected ${selectedIds.length} node(s). ${'diagnostics' in message && Array.isArray(message.diagnostics) && message.diagnostics.length ? message.diagnostics.join('; ') : 'Mappings ready; custom target catalogs remain unresolved until connected.'}`;
+      render(); return;
+    }
+    if (message.type === 'mapping-saved') {
+      sourceRevision++;
+      if (publishedId) { stale = true; publishedStale = true; publicationStatus = 'Mapping changed — republish before treating this preview as current.'; }
+      mappingStatus = `Saved stable alias ${'alias' in message ? String(message.alias) : ''}. Rename the Figma layer without changing this alias.`;
+      parent.postMessage({ pluginMessage: { type: 'read-mappings' } }, '*'); render(); return;
+    }
+    if (message.type === 'mapping-error') { mappingStatus = 'message' in message ? String(message.message) : 'Mapping unavailable'; render(); return; }
     if (message.type === 'source-changed') {
       sourceRevision++;
       if (publishedId) { stale = true; publishedStale = true; publicationStatus = 'Source changed — republish before treating this preview as current.'; render(); }
@@ -213,7 +262,8 @@ window.addEventListener('message', event => {
       associated = false; namespace = ''; render(); return;
     }
     if (message.type === 'namespace-associated' && 'namespace' in message && typeof message.namespace === 'string') {
-      namespace = message.namespace; retained = namespace; associated = true; render(); return;
+      namespace = message.namespace; retained = namespace; associated = true;
+      parent.postMessage({ pluginMessage: { type: 'read-mappings' } }, '*'); render(); return;
     }
     if (message.type === 'fallback-approved') { publicationStatus = 'Decorative fallback approved for this exact node and feature. Capture again to publish.'; render(); return; }
     if (message.type === 'fallback-error' && 'message' in message) { publicationStatus = `Fallback not approved: ${String(message.message)}`; render(); return; }
@@ -252,6 +302,7 @@ window.addEventListener('message', event => {
     publicationStatus = 'Source changed — republish before treating this preview as current.';
   }
   panel.selection = selectionPanel(message.names);
+  if (associated) parent.postMessage({ pluginMessage: { type: 'read-mappings' } }, '*');
   render();
 });
 render();

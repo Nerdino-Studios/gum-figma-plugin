@@ -63,6 +63,7 @@ export async function captureSelection(
   images: { getImageByHash(hash: string): { getBytesAsync(): Promise<Uint8Array> } | null },
   budget: Partial<typeof limits> = {}, aliases: Readonly<Record<string, string>> = {},
   approvals: readonly { nodeId: string; feature: string; fingerprint: string }[] = [],
+  rootMappings: readonly { rootId: string; mode: 'generate'; catalogId: string; revision: string; controlId: 'native.frame' }[] = [],
 ) {
   if (!documentNamespace || /[/\\]/.test(documentNamespace)) throw new Error('Document namespace must be a path-free identity');
   const bound = { ...limits, ...budget };
@@ -349,11 +350,12 @@ export async function captureSelection(
   if (diagnostics.length) return { snapshot: null, assets: [], diagnostics };
   const selectedRootIds = selected.map(root => root.id);
   const rootAliases = roots.roots.filter(root => root.alias).sort((a, b) => a.id.localeCompare(b.id)).map(root => ({ rootId: root.id, alias: root.alias! }));
-  const semantic = { documentNamespace, selectedRootIds, rootAliases, nodes };
+  const semantic = { documentNamespace, selectedRootIds, rootAliases, nodes,
+    ...(rootMappings.length ? { rootMappings: [...rootMappings].sort((a, b) => a.rootId.localeCompare(b.rootId)) } : {}) };
   const layout = nodes.some(node => node.layoutMode !== undefined && node.layoutMode !== 'NONE' ||
     node.horizontalSizing === 'HUG' || node.verticalSizing === 'HUG' ||
     ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign'].some(key => key in node));
   const geometry = nodes.some(node => node.clipsContent || node.rotation !== undefined || node.scaleMode === 'CROP' || node.fallback);
   const responsive = nodes.some(node => ['horizontalSizing' , 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => key in node));
-  return { snapshot: { schemaVersion: { major: 1, minor: geometry ? 3 : layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
+  return { snapshot: { schemaVersion: { major: 1, minor: rootMappings.length ? 4 : geometry ? 3 : layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
 }
