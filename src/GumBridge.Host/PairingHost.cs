@@ -34,7 +34,7 @@ public sealed class PairingHost : IAsyncDisposable
     private readonly ConcurrentDictionary<string, DateTimeOffset> challenges = new();
     private readonly ConcurrentDictionary<string, byte> sessions = new();
     public string Address { get; private set; } = "";
-    private PairingHost(WebApplication app, Func<DateTimeOffset> utcNow, string dataDirectory, FileStream ownershipLock)
+    private PairingHost(WebApplication app, Func<DateTimeOffset> utcNow, string dataDirectory, FileStream ownershipLock, Func<string, string[], Task>? previewToolRunner)
     {
         this.app = app;
         this.utcNow = utcNow;
@@ -44,7 +44,7 @@ public sealed class PairingHost : IAsyncDisposable
         workspaceStore = new WorkspaceStore(dataDirectory);
         publicationStore = new PublicationStore(dataDirectory, utcNow);
         previewStore = new PreviewStore(dataDirectory);
-        previewOperation = new PreviewOperation(publicationStore, previewStore);
+        previewOperation = new PreviewOperation(publicationStore, previewStore, previewToolRunner);
     }
 
     // Only the local console path calls this method in production; never expose it as HTTP.
@@ -56,7 +56,7 @@ public sealed class PairingHost : IAsyncDisposable
         return challenge;
     }
 
-    public static async Task<PairingHost> StartAsync(int port = 48931, Func<DateTimeOffset>? utcNow = null, string? localDataDirectory = null)
+    public static async Task<PairingHost> StartAsync(int port = 48931, Func<DateTimeOffset>? utcNow = null, string? localDataDirectory = null, Func<string, string[], Task>? previewToolRunner = null)
     {
         var data = localDataDirectory ?? WorkspaceCli.DefaultDataDirectory;
         if (Path.Exists(data) && (File.GetAttributes(data) & FileAttributes.ReparsePoint) != 0) throw new IOException("Local data directory must not be linked");
@@ -71,7 +71,7 @@ public sealed class PairingHost : IAsyncDisposable
         builder.Logging.ClearProviders(); // Requests, challenge bodies and tokens must not enter normal logs.
         builder.WebHost.UseKestrel(options => { options.Limits.MaxRequestBodySize = 6 * 1024 * 1024; options.Listen(IPAddress.Loopback, port); });
         var app = builder.Build();
-        var host = new PairingHost(app, utcNow ?? (() => DateTimeOffset.UtcNow), data, ownershipLock);
+        var host = new PairingHost(app, utcNow ?? (() => DateTimeOffset.UtcNow), data, ownershipLock, previewToolRunner);
         app.Use(async (context, next) =>
         {
             var request = context.Request;
@@ -166,8 +166,9 @@ public sealed class PairingHost : IAsyncDisposable
                 return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshotId = request.snapshotId, workspaceId = entry.id, targetHash, outputHash, artifactId });
             }
             catch (ArgumentException) { return Results.BadRequest(new { code = "INVALID_PREVIEW_REQUEST" }); }
-            catch (InvalidOperationException e) { return Results.Conflict(new { code = e.Message.Split(':')[0] }); }
-            catch (IOException) { return Results.Conflict(new { code = "VALIDATION_FAILED" }); }
+            catch (PreviewToolFailure e) { return Results.Conflict(new { code = e.Code, stage = e.Stage, details = e.Details }); }
+            catch (InvalidOperationException e) { return Results.Conflict(new { code = PreviewOperation.ErrorCode(e.Message), stage = "preview", details = PreviewOperation.ToolFailure("preview", "", e.Message).Details }); }
+            catch (IOException e) { return Results.Conflict(new { code = "VALIDATION_FAILED", stage = "preview", details = PreviewOperation.ToolFailure("preview", "", e.Message).Details }); }
             finally { host.previewLock.Release(); }
         });
         app.MapGet("/v1/artifacts", (HttpContext context, string workspaceId, string snapshotId, string targetHash, string artifactId) =>

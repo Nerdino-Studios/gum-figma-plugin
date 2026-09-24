@@ -10,6 +10,26 @@ const output = 'sha256:' + 'd'.repeat(64);
 const artifact = 'sha256:' + 'e'.repeat(64);
 const pair = { token: 'F'.repeat(64), schemaVersion };
 
+test('authenticated preview failure surfaces bounded tool stage and details but never a token', async () => {
+  const client = new BridgeClient(async url => {
+    if (url.endsWith('/pair')) return { ok: true, json: async () => pair };
+    if (url.includes('preview-target')) return { ok: true, json: async () => ({ schemaVersion, workspaceId: workspace, targetHash: target }) };
+    return { ok: false, status: 409, json: async () => ({ code: 'VALIDATION_FAILED', stage: 'gumcli check', details: 'Missing screen /private/tmp/example.gusx' }) };
+  });
+  await client.pair('E'.repeat(64));
+  await assert.rejects(client.preview(workspace, snapshot), /gumcli check.*Missing screen \/private\/tmp\/example.gusx/);
+});
+
+test('non-tool preview failure preserves validated context', async () => {
+  const client = new BridgeClient(async url => {
+    if (url.endsWith('/pair')) return { ok: true, json: async () => pair };
+    if (url.includes('preview-target')) return { ok: true, json: async () => ({ schemaVersion, workspaceId: workspace, targetHash: target }) };
+    return { ok: false, status: 409, json: async () => ({ code: 'VALIDATION_FAILED', stage: 'preview', details: 'Missing code generation settings' }) };
+  });
+  await client.pair('E'.repeat(64));
+  await assert.rejects(client.preview(workspace, snapshot), /VALIDATION_FAILED at preview: Missing code generation settings/);
+});
+
 test('preview denies missing, stale, unauthorized or mismatched provenance without an image', async () => {
   for (const [status, body] of [[404, null], [409, null], [401, null], [200, { schemaVersion, workspaceId: workspace, snapshotId: snapshot, targetHash: target, outputHash: output, artifactId: artifact }]]) {
     let artifactRequests = 0;

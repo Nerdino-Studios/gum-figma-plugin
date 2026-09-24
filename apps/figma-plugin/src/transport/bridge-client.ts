@@ -81,7 +81,19 @@ export class BridgeClient {
       method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ schemaVersion: { major: 1, minor: 0 }, workspaceId, snapshotId, targetHash: target.targetHash }),
     });
-    if (!response.ok) throw new Error(`Preview failed (${response.status}); the published snapshot or target may have changed.`);
+    if (!response.ok) {
+      // Only authenticated conflicts carry local diagnostics. Never display arbitrary response bodies.
+      if (response.status === 409) {
+        let failure: unknown;
+        try { failure = await response.json(); } catch { /* Older hosts have no structured body. */ }
+        if (isRecord(failure) && typeof failure.code === 'string' && /^[A-Z_]{1,40}$/.test(failure.code) &&
+          typeof failure.stage === 'string' && failure.stage.length <= 80 &&
+          typeof failure.details === 'string' && failure.details.length <= 2200) {
+          throw new Error(`Preview failed (${response.status}) ${failure.code} at ${failure.stage}: ${failure.details}`);
+        }
+      }
+      throw new Error(`Preview failed (${response.status}); the published snapshot or target may have changed.`);
+    }
     const result: unknown = await response.json();
     if (!isRecord(result) || !isVersion(result.schemaVersion) || result.workspaceId !== workspaceId || result.snapshotId !== snapshotId ||
       result.targetHash !== target.targetHash || !isHash(result.outputHash) || !isHash(result.artifactId)) throw new Error('Mismatched preview provenance.');

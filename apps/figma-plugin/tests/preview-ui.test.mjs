@@ -30,7 +30,7 @@ test('selection changes immediately label a visible successful preview stale', a
     builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: `export class BridgeClient {
       async pair() {} async workspaces() { return { workspaces: [{ id: 'workspace', label: 'Sample' }] }; }
       async publish() { return { snapshotId: 'sha256:snapshot' }; }
-      async preview() { return { png: new Uint8Array([137,80,78,71,13,10,26,10]), outputHash: '${outputHash}', targetHash: 'sha256:target', artifactId: 'sha256:artifact' }; }
+      async preview() { if (globalThis.previewFailure) throw new Error(globalThis.previewFailure); return { png: new Uint8Array([137,80,78,71,13,10,26,10]), outputHash: '${outputHash}', targetHash: 'sha256:target', artifactId: 'sha256:artifact' }; }
     }`, loader: 'js' }));
   } }] });
   await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
@@ -48,4 +48,9 @@ test('selection changes immediately label a visible successful preview stale', a
   listeners.message({ data: { pluginMessage: { type: 'selection-changed', names: ['Other frame'] } } });
   assert.match(content.textContent, /Source changed/);
   assert.match(content.children.find(child => child.tag === 'p').textContent, /Stale.*Snapshot/);
+  globalThis.previewFailure = 'VALIDATION_FAILED at gumcli check: <img src=x onerror=alert(1)> /private/tmp/missing.gumx';
+  await find(content, 'Render published snapshot in Gum').listeners.click();
+  assert.match(content.textContent, /gumcli check: <img src=x onerror=alert\(1\)> \/private\/tmp\/missing.gumx/);
+  assert.equal(content.children.filter(child => child.tag === 'img').length, 1); // retained native preview only
+  delete globalThis.previewFailure;
 });

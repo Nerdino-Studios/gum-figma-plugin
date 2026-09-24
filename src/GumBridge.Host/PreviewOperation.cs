@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,7 +22,13 @@ public sealed class PreviewOperation
 {
     private readonly PublicationStore publications;
     private readonly PreviewStore artifacts;
-    public PreviewOperation(PublicationStore publications, PreviewStore artifacts) { this.publications = publications; this.artifacts = artifacts; }
+    private readonly Func<string, string[], Task> toolRunner;
+    public PreviewOperation(PublicationStore publications, PreviewStore artifacts, Func<string, string[], Task>? toolRunner = null)
+    {
+        this.publications = publications;
+        this.artifacts = artifacts;
+        this.toolRunner = toolRunner ?? Run;
+    }
     public static string TargetHash(WorkspaceEntry entry)
     {
         if (entry.kind != "sample") throw new ArgumentException("Preview requires the bundled Sample workspace");
@@ -100,13 +108,13 @@ public sealed class PreviewOperation
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllBytes(path, bytes);
             }
-            await Run(stage, "check", gumx);
-            await Run(stage, "fonts", gumx);
+            await toolRunner(stage, ["check", gumx]);
+            await toolRunner(stage, ["fonts", gumx]);
             if (snapshot.GetProperty("nodes").EnumerateArray().Any(node => node.GetProperty("type").GetString() == "TEXT") &&
                 !File.Exists(Path.Combine(Path.GetDirectoryName(gumx)!, "FontCache", "Font24Arial.fnt"))) throw new InvalidOperationException("MISSING_FONT");
-            await Run(stage, "codegen", gumx);
+            await toolRunner(stage, ["codegen", gumx]);
             var png = Path.Combine(stage, "result.png");
-            await Run(stage, "screenshot", gumx, screen.Name, "--output", png, "--width", width.ToString(), "--height", height.ToString(), "--backend", "monogame");
+            await toolRunner(stage, ["screenshot", gumx, screen.Name, "--output", png, "--width", width.ToString(), "--height", height.ToString(), "--backend", "monogame"]);
             if (TargetHash(entry) != target) throw new InvalidOperationException("STALE_TARGET");
             var artifactId = artifacts.Create(entry.id, snapshotId, target, File.ReadAllBytes(png));
             return (artifactId, artifacts.OutputHash(entry.id, snapshotId, target, artifactId), target);
@@ -150,6 +158,32 @@ public sealed class PreviewOperation
         foreach (var directory in Directory.GetDirectories(source))
             if (Path.GetFileName(directory) is not ("bin" or "obj" or "FontCache")) CopyTree(directory, Path.Combine(destination, Path.GetFileName(directory)));
     }
+    public static string ErrorCode(string message)
+    {
+        var prefix = message.Split(':', 2)[0];
+        return Regex.IsMatch(prefix, "^[A-Z_]{1,40}$") ? prefix : "VALIDATION_FAILED";
+    }
+    public static PreviewToolFailure ToolFailure(string step, string stdout, string stderr)
+    {
+        var source = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+        source = Regex.Replace(source, @"(?i)(Authorization\s*:\s*Bearer\s+|Bearer\s+|challenge\s*[:=]\s*)[^\s]+", "$1[redacted]");
+        const int limit = 2048;
+        var truncated = source.Length > limit;
+        return new PreviewToolFailure("gumcli " + step, source[..Math.Min(source.Length, limit)] + (truncated ? " [truncated]" : ""));
+    }
+    private static async Task<(string Text, bool Truncated)> Capture(System.IO.TextReader reader)
+    {
+        var result = new StringBuilder();
+        var buffer = new char[2048];
+        var truncated = false;
+        int count;
+        while ((count = await reader.ReadAsync(buffer)) > 0)
+        {
+            if (result.Length + count > 8192) truncated = true;
+            result.Append(buffer, 0, Math.Min(count, Math.Max(0, 8192 - result.Length)));
+        }
+        return (result.ToString(), truncated);
+    }
     private static async Task Run(string stage, params string[] args)
     {
         using var process = new Process { StartInfo = new ProcessStartInfo("dotnet") { WorkingDirectory = stage, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false } };
@@ -158,10 +192,28 @@ public sealed class PreviewOperation
         foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
         process.Start();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
+        var stdout = Capture(process.StandardOutput); var stderr = Capture(process.StandardError);
         try { await process.WaitForExitAsync(timeout.Token); }
-        catch (OperationCanceledException) { process.Kill(true); throw new InvalidOperationException("TOOLCHAIN_TIMEOUT"); }
-        if (process.ExitCode != 0) throw new InvalidOperationException("VALIDATION_FAILED: gumcli " + args[0] + ": " + (await stderr)[..Math.Min((await stderr).Length, 500)]);
-        await stdout; await stderr;
+        catch (OperationCanceledException) { process.Kill(true); throw new InvalidOperationException("TOOLCHAIN_TIMEOUT: gumcli " + args[0]); }
+        var outText = await stdout; var errText = await stderr;
+        if (process.ExitCode != 0)
+        {
+            var failure = ToolFailure(args[0], outText.Text, errText.Text);
+            if ((string.IsNullOrWhiteSpace(errText.Text) ? outText.Truncated : errText.Truncated) && !failure.Details.Contains("[truncated]"))
+                failure = new PreviewToolFailure(failure.Stage, failure.Details + " [truncated]");
+            throw failure;
+        }
+    }
+}
+
+public sealed class PreviewToolFailure : InvalidOperationException
+{
+    public string Code => "VALIDATION_FAILED";
+    public string Stage { get; }
+    public string Details { get; }
+    public PreviewToolFailure(string stage, string details) : base("VALIDATION_FAILED: " + stage + ": " + details)
+    {
+        Stage = stage;
+        Details = details;
     }
 }
