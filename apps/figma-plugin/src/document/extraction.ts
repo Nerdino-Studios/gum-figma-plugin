@@ -1,5 +1,5 @@
-import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { hashBytes } from '../hash.ts';
+export { hashBytes } from '../hash.ts';
 import { readSelectedRoots, type ExtractionDiagnostic } from './selection.ts';
 import { encodeUtf8 } from './utf8.ts';
 
@@ -23,8 +23,6 @@ export interface DesignNode {
   x: number; y: number; width: number; height: number; visible: boolean;
   layoutMode?: string; clipsContent?: boolean; characters?: string; fontSize?: number; fontFamily?: string; fontStyle?: string; color?: string; imageHash?: string; scaleMode?: string;
 }
-export function hashBytes(bytes: Uint8Array): string { return `sha256:${bytesToHex(sha256(bytes))}`; }
-
 // JSON keys sorted recursively. Reject non-finite numbers before hashing; normalize -0 and CRLF.
 export function canonicalize(value: unknown): string {
   if (typeof value === 'number') {

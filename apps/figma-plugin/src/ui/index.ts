@@ -1,6 +1,7 @@
 import { initialPanel, selectionPanel, type ViewKey } from './state';
 import { isSceneToUi } from '../transport/messages';
 import { BridgeClient } from '../transport/bridge-client';
+import { hashBytes } from '../hash';
 
 const bridge = new BridgeClient();
 let connectionStatus = 'Offline — enter a locally authorized challenge to pair.';
@@ -58,9 +59,7 @@ function render(): void {
         try {
           const result = await bridge.preview(requestedWorkspace, requestedSnapshot);
           if (workspaceId !== requestedWorkspace || publishedId !== requestedSnapshot) throw new Error('Preview request superseded by a different publication or workspace.');
-          const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(result.png)));
-          const hash = 'sha256:' + Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
-          if (hash !== result.outputHash || !result.png.slice(0, 8).every((byte, i) => byte === [137, 80, 78, 71, 13, 10, 26, 10][i])) throw new Error('Preview PNG output hash mismatch.');
+          if (hashBytes(new Uint8Array(result.png)) !== result.outputHash || !result.png.slice(0, 8).every((byte, i) => byte === [137, 80, 78, 71, 13, 10, 26, 10][i])) throw new Error('Preview PNG output hash mismatch.');
           if (previewUrl) URL.revokeObjectURL(previewUrl);
           previewUrl = URL.createObjectURL(new Blob([new Uint8Array(result.png)], { type: 'image/png' }));
           previewIdentity = `Snapshot ${requestedSnapshot}; target ${result.targetHash}; output ${result.outputHash}; artifact ${result.artifactId}. Staged only — target unchanged.`;
