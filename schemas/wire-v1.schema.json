@@ -58,8 +58,15 @@
         "visible": {
           "type": "boolean"
         },
-        "horizontalSizing": { "enum": ["FIXED", "FILL"] },
-        "verticalSizing": { "enum": ["FIXED", "FILL"] },
+        "horizontalSizing": { "enum": ["FIXED", "FILL", "HUG"] },
+        "verticalSizing": { "enum": ["FIXED", "FILL", "HUG"] },
+        "itemSpacing": { "type": "number", "minimum": 0 },
+        "paddingLeft": { "type": "number", "minimum": 0 },
+        "paddingRight": { "type": "number", "minimum": 0 },
+        "paddingTop": { "type": "number", "minimum": 0 },
+        "paddingBottom": { "type": "number", "minimum": 0 },
+        "counterAxisAlignItems": { "enum": ["MIN", "CENTER", "MAX"] },
+        "layoutAlign": { "enum": ["INHERIT", "MIN", "CENTER", "MAX"] },
         "horizontalAnchor": { "enum": ["MIN", "MAX", "CENTER", "STRETCH"] },
         "verticalAnchor": { "enum": ["MIN", "MAX", "CENTER", "STRETCH"] },
         "minWidth": { "type": "number", "minimum": 0 },
@@ -190,7 +197,9 @@
                   "required": [
                     "scaleMode"
                   ]
-                }
+                },
+                { "required": ["itemSpacing"] }, { "required": ["paddingLeft"] }, { "required": ["paddingRight"] },
+                { "required": ["paddingTop"] }, { "required": ["paddingBottom"] }, { "required": ["counterAxisAlignItems"] }
               ]
             }
           }
@@ -244,7 +253,9 @@
                   "required": [
                     "color"
                   ]
-                }
+                },
+                { "required": ["itemSpacing"] }, { "required": ["paddingLeft"] }, { "required": ["paddingRight"] },
+                { "required": ["paddingTop"] }, { "required": ["paddingBottom"] }, { "required": ["counterAxisAlignItems"] }
               ]
             }
           }
@@ -311,6 +322,15 @@
           { "required": ["horizontalAnchor"] }, { "required": ["verticalAnchor"] },
           { "required": ["minWidth"] }, { "required": ["maxWidth"] },
           { "required": ["minHeight"] }, { "required": ["maxHeight"] }
+        ] } } } } }
+      }, {
+        "if": { "properties": { "schemaVersion": { "properties": { "minor": { "maximum": 1 } } } } },
+        "then": { "properties": { "nodes": { "items": { "not": { "anyOf": [
+          { "required": ["itemSpacing"] }, { "required": ["paddingLeft"] }, { "required": ["paddingRight"] },
+          { "required": ["paddingTop"] }, { "required": ["paddingBottom"] },
+          { "required": ["counterAxisAlignItems"] }, { "required": ["layoutAlign"] },
+          { "properties": { "horizontalSizing": { "const": "HUG" } }, "required": ["horizontalSizing"] },
+          { "properties": { "verticalSizing": { "const": "HUG" } }, "required": ["verticalSizing"] }
         ] } } } } }
       }],
       "required": [

@@ -14,6 +14,7 @@ export interface SourceNode {
   characters?: string; fontSize?: number | symbol; fills?: readonly { type: string; imageHash?: string; scaleMode?: string; color?: { r: number; g: number; b: number }; opacity?: number; visible?: boolean; imageTransform?: unknown; rotation?: number; filters?: Readonly<Record<string, number>>; blendMode?: string; boundVariables?: unknown }[] | symbol;
   fontName?: unknown; effects?: readonly unknown[]; strokes?: readonly unknown[];
   itemSpacing?: number; paddingLeft?: number; paddingRight?: number; paddingTop?: number; paddingBottom?: number;
+  counterAxisAlignItems?: string; primaryAxisAlignItems?: string; layoutWrap?: string; layoutAlign?: string; layoutPositioning?: string;
   rotation?: number; opacity?: number; layoutSizingHorizontal?: string; layoutSizingVertical?: string;
   constraints?: { horizontal: string; vertical: string };
   minWidth?: number | null; maxWidth?: number | null; minHeight?: number | null; maxHeight?: number | null;
@@ -22,8 +23,10 @@ export interface DesignNode {
   id: string; parentId: string | null; type: 'FRAME' | 'TEXT' | 'IMAGE'; name: string;
   x: number; y: number; width: number; height: number; visible: boolean;
   layoutMode?: string; clipsContent?: boolean; characters?: string; fontSize?: number; fontFamily?: string; fontStyle?: string; color?: string; imageHash?: string; scaleMode?: string;
-  horizontalSizing?: 'FILL'; verticalSizing?: 'FILL'; horizontalAnchor?: 'MAX' | 'CENTER' | 'STRETCH'; verticalAnchor?: 'MAX' | 'CENTER' | 'STRETCH';
+  horizontalSizing?: 'FILL' | 'HUG'; verticalSizing?: 'FILL' | 'HUG'; horizontalAnchor?: 'MAX' | 'CENTER' | 'STRETCH'; verticalAnchor?: 'MAX' | 'CENTER' | 'STRETCH';
   minWidth?: number; maxWidth?: number; minHeight?: number; maxHeight?: number;
+  itemSpacing?: number; paddingLeft?: number; paddingRight?: number; paddingTop?: number; paddingBottom?: number;
+  counterAxisAlignItems?: 'MIN' | 'CENTER' | 'MAX'; layoutAlign?: 'INHERIT' | 'MIN' | 'CENTER' | 'MAX';
 }
 // JSON keys sorted recursively. Reject non-finite numbers before hashing; normalize -0 and CRLF.
 export function canonicalize(value: unknown): string {
@@ -79,7 +82,10 @@ export async function captureSelection(
       blendMode: p.blendMode ?? null, boundVariables: p.boundVariables ?? null })),
     effects: node.effects?.length ?? 0, strokes: node.strokes?.length ?? 0,
     itemSpacing: node.itemSpacing ?? null, paddingLeft: node.paddingLeft ?? null, paddingRight: node.paddingRight ?? null,
-    paddingTop: node.paddingTop ?? null, paddingBottom: node.paddingBottom ?? null, rotation: node.rotation ?? null,
+    paddingTop: node.paddingTop ?? null, paddingBottom: node.paddingBottom ?? null,
+    counterAxisAlignItems: node.counterAxisAlignItems ?? null, primaryAxisAlignItems: node.primaryAxisAlignItems ?? null,
+    layoutWrap: node.layoutWrap ?? null, layoutAlign: node.layoutAlign ?? null,
+    layoutPositioning: node.layoutPositioning ?? null, rotation: node.rotation ?? null,
     opacity: node.opacity ?? null, layoutSizingHorizontal: node.layoutSizingHorizontal ?? null,
     layoutSizingVertical: node.layoutSizingVertical ?? null,
     constraints: node.constraints ?? null, minWidth: node.minWidth ?? null, maxWidth: node.maxWidth ?? null,
@@ -96,7 +102,7 @@ export async function captureSelection(
   function fail(node: SourceNode, property: string, message: string, code = 'UNSUPPORTED_FEATURE') {
     diagnostics.push({ code, severity: 'error', nodeId: node.id, property, message });
   }
-  function visit(node: SourceNode, parentId: string | null, depth: number) {
+  function visit(node: SourceNode, parentId: string | null, depth: number, parent?: SourceNode) {
     if (depth > bound.maxDepth || nodes.length >= bound.maxNodes) { fail(node, 'children', 'Capture depth/node budget exceeded'); return; }
     const observation: (typeof observed)[number] = { node, fingerprint: hash(propertySnapshot(node)) };
     observed.push(observation);
@@ -135,9 +141,9 @@ export async function captureSelection(
       const anchor = node.constraints?.[axis] ?? 'MIN';
       const sizing = node[sizingKey] ?? 'FIXED';
       if (!['MIN', 'MAX', 'CENTER', 'STRETCH'].includes(anchor)) fail(node, 'constraints', `Unsupported ${axis} anchor ${anchor}; use MIN, MAX, CENTER or STRETCH`);
-      // Figma FILL is only valid for auto-layout children (unsupported here).
-      // A plain-frame STRETCH constraint independently describes parent-relative size.
-      if (sizing !== 'FIXED') fail(node, sizingKey, `${axis} ${sizing} sizing requires auto layout; only plain-frame FIXED sizing and STRETCH constraints are supported`);
+      if (sizing !== 'FIXED' && !(sizing === 'HUG' && node.type === 'FRAME' && node.layoutMode !== 'NONE') &&
+        !(sizing === 'FILL' && parent?.layoutMode !== undefined && parent.layoutMode !== 'NONE'))
+        fail(node, sizingKey, `${axis} ${sizing} sizing requires a supported auto layout`);
       const min = node[`min${size}` as 'minWidth' | 'minHeight'];
       const max = node[`max${size}` as 'maxWidth' | 'maxHeight'];
       for (const [property, value] of [[`min${size}`, min], [`max${size}`, max]] as const)
@@ -148,8 +154,27 @@ export async function captureSelection(
           'Export root requires fixed geometry; apply responsive sizing and limits to children');
     }
     for (const property of ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'] as const) {
-      if (node[property] !== undefined && node[property] !== 0) fail(node, property, 'Layout spacing/padding is not yet captured');
+      const value = node[property];
+      if (value !== undefined && (!Number.isFinite(value) || value < 0 || (value !== 0 && ((node.layoutMode ?? 'NONE') === 'NONE' || node.type !== 'FRAME'))))
+        fail(node, property, 'Spacing and padding must be nonnegative values on an auto-layout frame');
     }
+    if (node.counterAxisAlignItems && !['MIN', 'CENTER', 'MAX'].includes(node.counterAxisAlignItems))
+      fail(node, 'counterAxisAlignItems', 'Unsupported cross-axis alignment');
+    if (node.counterAxisAlignItems && node.counterAxisAlignItems !== 'MIN' && (node.layoutMode ?? 'NONE') === 'NONE')
+      fail(node, 'counterAxisAlignItems', 'Cross-axis alignment requires auto layout');
+    if (node.primaryAxisAlignItems && node.primaryAxisAlignItems !== 'MIN')
+      fail(node, 'primaryAxisAlignItems', 'Main-axis distribution requires a verified stack rule');
+    if (node.layoutWrap && node.layoutWrap !== 'NO_WRAP')
+      fail(node, 'layoutWrap', 'Wrapping requires a verified Gum rule');
+    if (node.layoutPositioning && node.layoutPositioning !== 'AUTO')
+      fail(node, 'layoutPositioning', 'Absolute-positioned children are excluded from stack flow; a verified rule is required');
+    if (node.layoutAlign && !['INHERIT', 'MIN', 'CENTER', 'MAX', 'STRETCH'].includes(node.layoutAlign))
+      fail(node, 'layoutAlign', 'Unsupported per-child cross-axis alignment');
+    if (node.layoutAlign && node.layoutAlign !== 'INHERIT' && (!parent || parent.layoutMode === 'NONE'))
+      fail(node, 'layoutAlign', 'Per-child alignment requires auto-layout parent');
+    if (node.layoutAlign === 'STRETCH' && parent &&
+      (parent.layoutMode === 'HORIZONTAL' ? node.layoutSizingVertical : node.layoutSizingHorizontal) === 'HUG')
+      fail(node, 'layoutAlign', 'Cross-axis STRETCH cannot also HUG');
     if (![node.x, node.y, node.width, node.height].every(Number.isFinite) || node.width < 0 || node.height < 0) {
       fail(node, 'bounds', 'Bounds must be finite and nonnegative in size'); return;
     }
@@ -174,7 +199,6 @@ export async function captureSelection(
       !solid.color || ![solid.color.r, solid.color.g, solid.color.b].every(v => Number.isFinite(v) && v >= 0 && v <= 1))) {
       fail(node, 'fills', 'Solid fill must have opaque finite RGB');
     }
-    if (node.type === 'FRAME' && node.layoutMode && node.layoutMode !== 'NONE') fail(node, 'layoutMode', 'Auto layout requires further captured alignment and spacing');
     if (node.type === 'RECTANGLE' && (fill.length !== 1 || fill[0].type !== 'IMAGE' || !fill[0].imageHash || !['FIT', 'FILL'].includes(fill[0].scaleMode ?? ''))) {
       fail(node, 'fills', 'Rectangle requires a FIT/FILL raster image'); return;
     }
@@ -193,11 +217,24 @@ export async function captureSelection(
       x: node.x, y: node.y, width: node.width, height: node.height, visible: node.visible,
       ...(color ? { color } : {}),
       ...(node.type === 'FRAME' ? { layoutMode: node.layoutMode ?? 'NONE', clipsContent: node.clipsContent ?? false } : {}),
-      ...(node.constraints?.horizontal === 'STRETCH' ? { horizontalSizing: 'FILL' as const } : {}),
-      ...(node.constraints?.vertical === 'STRETCH' ? { verticalSizing: 'FILL' as const } : {}),
-      ...(['MAX', 'CENTER', 'STRETCH'].includes(node.constraints?.horizontal ?? '') ? { horizontalAnchor: node.constraints!.horizontal as 'MAX' | 'CENTER' | 'STRETCH' } : {}),
-      ...(['MAX', 'CENTER', 'STRETCH'].includes(node.constraints?.vertical ?? '') ? { verticalAnchor: node.constraints!.vertical as 'MAX' | 'CENTER' | 'STRETCH' } : {}),
+      ...(node.layoutSizingHorizontal === 'HUG' ? { horizontalSizing: 'HUG' as const } :
+        node.layoutSizingHorizontal === 'FILL' || node.constraints?.horizontal === 'STRETCH' ||
+        node.layoutAlign === 'STRETCH' && parent?.layoutMode === 'VERTICAL' ? { horizontalSizing: 'FILL' as const } : {}),
+      ...(node.layoutSizingVertical === 'HUG' ? { verticalSizing: 'HUG' as const } :
+        node.layoutSizingVertical === 'FILL' || node.constraints?.vertical === 'STRETCH' ||
+        node.layoutAlign === 'STRETCH' && parent?.layoutMode === 'HORIZONTAL' ? { verticalSizing: 'FILL' as const } : {}),
+      ...(node.layoutSizingHorizontal === 'FILL' || node.layoutAlign === 'STRETCH' && parent?.layoutMode === 'VERTICAL' ? { horizontalAnchor: 'STRETCH' as const } :
+        ['MAX', 'CENTER', 'STRETCH'].includes(node.constraints?.horizontal ?? '') ? { horizontalAnchor: node.constraints!.horizontal as 'MAX' | 'CENTER' | 'STRETCH' } : {}),
+      ...(node.layoutSizingVertical === 'FILL' || node.layoutAlign === 'STRETCH' && parent?.layoutMode === 'HORIZONTAL' ? { verticalAnchor: 'STRETCH' as const } :
+        ['MAX', 'CENTER', 'STRETCH'].includes(node.constraints?.vertical ?? '') ? { verticalAnchor: node.constraints!.vertical as 'MAX' | 'CENTER' | 'STRETCH' } : {}),
       ...Object.fromEntries((['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const).filter(key => node[key] != null).map(key => [key, node[key]])),
+      ...(node.type === 'FRAME' && node.layoutMode !== 'NONE' ? {
+        ...Object.fromEntries((['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'] as const)
+          .filter(key => node[key] !== undefined && node[key] !== 0).map(key => [key, node[key]])),
+        ...(node.counterAxisAlignItems && node.counterAxisAlignItems !== 'MIN' ? { counterAxisAlignItems: node.counterAxisAlignItems as 'CENTER' | 'MAX' } : {}),
+      } : {}),
+      ...(parent?.layoutMode && parent.layoutMode !== 'NONE' && node.layoutAlign && node.layoutAlign !== 'INHERIT' && node.layoutAlign !== 'STRETCH' ?
+        { layoutAlign: node.layoutAlign as 'MIN' | 'CENTER' | 'MAX' } : {}),
       ...(node.type === 'TEXT' ? { characters: node.characters!, fontSize: node.fontSize as number, fontFamily: (node.fontName as { family: string }).family, fontStyle: (node.fontName as { style: string }).style } : {}),
       ...(node.type === 'RECTANGLE' && fill[0]?.imageHash ? { scaleMode: fill[0].scaleMode } : {}),
     };
@@ -215,7 +252,7 @@ export async function captureSelection(
       fail(node, 'children', 'Capture stopped at node budget'); return;
     }
     observation.childIds = children.map(child => child.id);
-    for (const child of children) visit(child, node.id, depth + 1);
+    for (const child of children) visit(child, node.id, depth + 1, node);
   }
   for (const root of selected) visit(root, null, 0);
   for (const item of pending) {
@@ -235,6 +272,9 @@ export async function captureSelection(
   const selectedRootIds = selected.map(root => root.id);
   const rootAliases = roots.roots.filter(root => root.alias).sort((a, b) => a.id.localeCompare(b.id)).map(root => ({ rootId: root.id, alias: root.alias! }));
   const semantic = { documentNamespace, selectedRootIds, rootAliases, nodes };
+  const layout = nodes.some(node => node.layoutMode !== undefined && node.layoutMode !== 'NONE' ||
+    node.horizontalSizing === 'HUG' || node.verticalSizing === 'HUG' ||
+    ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign'].some(key => key in node));
   const responsive = nodes.some(node => ['horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => key in node));
-  return { snapshot: { schemaVersion: { major: 1, minor: responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
+  return { snapshot: { schemaVersion: { major: 1, minor: layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
 }

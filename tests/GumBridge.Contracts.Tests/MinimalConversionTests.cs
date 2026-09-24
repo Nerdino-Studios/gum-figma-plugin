@@ -109,7 +109,7 @@ public sealed class MinimalConversionTests
         Assert.True(process.WaitForExit(60000) && process.ExitCode == 0, stdout + stderr);
     }
 
-    private static (byte R, byte G, byte B) ReadPngPixel(byte[] png, int x, int y)
+    internal static (byte R, byte G, byte B) ReadPngPixel(byte[] png, int x, int y)
     {
         static int U32(byte[] b, int offset) => (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(offset, 4));
         Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, png[..8]);

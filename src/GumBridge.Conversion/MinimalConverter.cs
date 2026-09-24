@@ -61,8 +61,29 @@ public static class MinimalConverter
             if (id != roots.FirstOrDefault() && !seen.Contains(roots.FirstOrDefault() ?? "")) errors.Add(new("INVALID_SNAPSHOT", id, "Node is outside selected root"));
             if (new[] { "x", "y", "width", "height" }.Any(key => Math.Abs(node.GetProperty(key).GetDouble()) > float.MaxValue))
                 errors.Add(new("INVALID_SNAPSHOT", id, "Geometry exceeds native Gum float range"));
-            if (type == "FRAME" && (node.GetProperty("layoutMode").GetString() != "NONE" || node.GetProperty("clipsContent").GetBoolean()))
-                errors.Add(new("UNSUPPORTED_FEATURE", id, "Auto layout and clipping require a later conversion rule"));
+            if (type == "FRAME" && node.GetProperty("layoutMode").GetString() != "NONE" && snapshot.GetProperty("schemaVersion").GetProperty("minor").GetInt32() < 2)
+                errors.Add(new("UNSUPPORTED_FEATURE", id, "Auto layout requires v1.2 capture with verified spacing and alignment"));
+            if (type == "FRAME" && node.GetProperty("clipsContent").GetBoolean())
+                errors.Add(new("UNSUPPORTED_FEATURE", id, "Clipping requires a later conversion rule"));
+            if (node.TryGetProperty("layoutAlign", out _) && (parentId is null || !byId.TryGetValue(parentId, out var alignedParent) ||
+                !alignedParent.TryGetProperty("layoutMode", out var alignedMode) || alignedMode.GetString() == "NONE"))
+                errors.Add(new("UNSUPPORTED_FEATURE", id, "Per-child alignment requires an auto-layout parent"));
+            if (type == "FRAME")
+            {
+                var mode = Property(node, "layoutMode", "NONE");
+                foreach (var key in new[] { "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom" })
+                    if (node.TryGetProperty(key, out var amount) && amount.GetDouble() > float.MaxValue)
+                        errors.Add(new("INVALID_SNAPSHOT", id, $"{key} exceeds native Gum float range"));
+                if (mode != "NONE" && new[] { ("horizontalSizing", "width", "Left", "Right"), ("verticalSizing", "height", "Top", "Bottom") }
+                    .Any(axis => Property(node, axis.Item1, "FIXED") == "FIXED" && Pad(node, axis.Item3) + Pad(node, axis.Item4) > node.GetProperty(axis.Item2).GetDouble()))
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Padding exceeds fixed outer dimensions"));
+                if (mode == "NONE" && HasLayout(node)) errors.Add(new("UNSUPPORTED_FEATURE", id, "Padding and alignment require auto layout"));
+                if (mode != "NONE" && node.TryGetProperty("counterAxisAlignItems", out _) &&
+                    Property(node, "counterAxisAlignItems", "MIN") != "MIN" &&
+                    new[] { "horizontalSizing", "verticalSizing" }.Any(axis => Property(node, axis, "FIXED") == "HUG" &&
+                        (axis == "horizontalSizing" ? mode == "VERTICAL" : mode == "HORIZONTAL")))
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Hug cross axis with centered/end-aligned children needs an independent content size"));
+            }
             if (type == "TEXT" && node.TryGetProperty("color", out _))
                 errors.Add(new("UNSUPPORTED_FEATURE", id, "Text color mapping requires a verified native rule"));
             if (type == "TEXT" && (node.GetProperty("fontFamily").GetString() != "Arial" || node.GetProperty("fontStyle").GetString() != "Regular" || node.GetProperty("fontSize").GetDouble() != 24))
@@ -86,11 +107,27 @@ public static class MinimalConverter
                 var anchor = Property(node, axis.Anchor, "MIN");
                 if (id == roots.FirstOrDefault() && (sizing != "FIXED" || anchor != "MIN" || HasLimit(node)))
                     errors.Add(new("UNSUPPORTED_FEATURE", id, "Export root sizing, anchoring and limits require a viewport mapping; use fixed root geometry"));
-                if (sizing == "FILL" && anchor != "STRETCH" || sizing == "FIXED" && anchor == "STRETCH")
+                if (sizing == "FILL" && anchor != "STRETCH" || sizing != "FILL" && anchor == "STRETCH")
                     errors.Add(new("UNSUPPORTED_FEATURE", id, $"{axis.Sizing} and {axis.Anchor} must pair FILL with STRETCH; change sizing or constraint"));
                 if (parentId is not null && byId.TryGetValue(parentId, out var sizingParent) && sizingParent.GetProperty("type").GetString() == "FRAME" &&
-                    (sizing == "FILL" || anchor != "MIN") && sizingParent.GetProperty("layoutMode").GetString() != "NONE")
-                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Responsive anchors inside auto layout require layout lowering first"));
+                    sizingParent.GetProperty("layoutMode").GetString() != "NONE")
+                {
+                    var mode = sizingParent.GetProperty("layoutMode").GetString();
+                    var alongStack = axis.Size == "Width" ? mode == "HORIZONTAL" : mode == "VERTICAL";
+                    var alignment = Property(node, "layoutAlign", "INHERIT");
+                    if (alignment == "INHERIT") alignment = Property(sizingParent, "counterAxisAlignItems", "MIN");
+                    if (!alongStack && Property(sizingParent, axis.Sizing, "FIXED") == "HUG" && (alignment is "CENTER" or "MAX"))
+                        errors.Add(new("UNSUPPORTED_FEATURE", parentId, $"Hug cross-axis alignment dependency cycle on {axis.Size}"));
+                    if (alongStack && (sizing == "FILL" || anchor != "MIN"))
+                        errors.Add(new("UNSUPPORTED_FEATURE", id, "Stack-axis fill and anchors require distribution rules"));
+                    if (!alongStack && anchor is "MAX" or "CENTER")
+                        errors.Add(new("UNSUPPORTED_FEATURE", id, "Use layoutAlign for cross-axis alignment in auto layout"));
+                    if (Property(sizingParent, axis.Sizing, "FIXED") == "HUG" && sizing == "FILL")
+                        errors.Add(new("UNSUPPORTED_FEATURE", sizingParent.GetProperty("id").GetString()!, $"Hug/fill dependency cycle on {axis.Size}"));
+                }
+                if (sizing == "HUG" && type != "FRAME") errors.Add(new("UNSUPPORTED_FEATURE", id, "Hug sizing requires a frame with children"));
+                if (sizing == "HUG" && type == "FRAME" && node.GetProperty("layoutMode").GetString() == "NONE")
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Hug sizing requires a supported stack"));
                 var min = Limit(node, "min" + axis.Size);
                 var max = Limit(node, "max" + axis.Size);
                 if (min > max) errors.Add(new("UNSUPPORTED_FEATURE", id, $"min{axis.Size} exceeds max{axis.Size}; correct sizing limits"));
@@ -99,15 +136,20 @@ public static class MinimalConverter
             }
             if (id == roots.FirstOrDefault())
             {
+                if (node.GetProperty("layoutMode").GetString() != "NONE")
+                    elements.Add(Content(names[id], node, null, screenRoot: true));
                 if (!node.GetProperty("visible").GetBoolean()) errors.Add(new("UNSUPPORTED_FEATURE", id, "Invisible export root cannot be represented as a visible screen"));
                 if (node.TryGetProperty("color", out var rootColor)) elements.Add(Visual(names[id] + "_Background", "Rectangle", null, true, node, rootColor.GetString()!, screenOrigin: true));
                 continue;
             }
             var name = names[id];
             var parentName = parentId == roots.FirstOrDefault() ? null : parentId is not null && names.TryGetValue(parentId, out var resolved) ? resolved : null;
-            if (type == "FRAME" && node.TryGetProperty("color", out var color))
+            if (parentId is not null && byId.TryGetValue(parentId, out var layoutParent) && layoutParent.TryGetProperty("layoutMode", out var parentLayout) && parentLayout.GetString() != "NONE")
+                parentName = names[parentId] + "_Content";
+            var stackParent = parentId is not null && byId.TryGetValue(parentId, out var gp) && gp.TryGetProperty("layoutMode", out var parentMode) && parentMode.GetString() != "NONE" ? gp : (JsonElement?)null;
+            if (type == "FRAME" && stackParent is null && node.GetProperty("layoutMode").GetString() == "NONE" && node.TryGetProperty("color", out var color))
                 elements.Add(Visual(name + "_Background", "Rectangle", parentName, node.GetProperty("visible").GetBoolean(), node, color.GetString()!, parentId is not null && byId.TryGetValue(parentId, out var visualParent) ? visualParent : null));
-            var values = Geometry(node, parentId is not null && byId.TryGetValue(parentId, out var geometryParent) ? geometryParent : null);
+            var values = Geometry(node, parentId is not null && byId.TryGetValue(parentId, out var geometryParent) ? geometryParent : null, stackParent);
             if (type == "TEXT")
             {
                 values.Add(new("Text", "string", node.GetProperty("characters").GetString()!));
@@ -121,6 +163,19 @@ public static class MinimalConverter
                 values.Add(new("TextureAddress", "int", "0"));
             }
             elements.Add(new(name, type == "FRAME" ? "Container" : type == "TEXT" ? "Text" : "Sprite", parentName, node.GetProperty("visible").GetBoolean(), values));
+            if (type == "FRAME" && (stackParent is not null || node.GetProperty("layoutMode").GetString() != "NONE"))
+            {
+                if (node.TryGetProperty("color", out var fill))
+                    elements.Add(new(name + "_Background", "Rectangle", name, node.GetProperty("visible").GetBoolean(),
+                        new List<GumValue> { new("X", "float", "0"), new("Y", "float", "0"), new("Width", "float", "0"), new("Height", "float", "0"),
+                            new("WidthUnits", "DimensionUnitType", "2"), new("HeightUnits", "DimensionUnitType", "2"),
+                            new("IgnoredByParentSize", "bool", "true"), new("IsFilled", "bool", "true"),
+                            new("FillRed", "int", System.Convert.ToByte(fill.GetString()!.Substring(1, 2), 16).ToString(CultureInfo.InvariantCulture)),
+                            new("FillGreen", "int", System.Convert.ToByte(fill.GetString()!.Substring(3, 2), 16).ToString(CultureInfo.InvariantCulture)),
+                            new("FillBlue", "int", System.Convert.ToByte(fill.GetString()!.Substring(5, 2), 16).ToString(CultureInfo.InvariantCulture)) }));
+                if (node.GetProperty("layoutMode").GetString() != "NONE")
+                    elements.Add(Content(name, node, name));
+            }
         }
         if (errors.Count > 0) return new([], errors);
         return new([new(aliases[roots[0]], elements)], []);
@@ -144,11 +199,35 @@ public static class MinimalConverter
     private static string Property(JsonElement node, string key, string fallback) =>
         node.TryGetProperty(key, out var value) ? value.GetString()! : fallback;
 
+    private static bool HasLayout(JsonElement node) => new[] { "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems" }.Any(k => node.TryGetProperty(k, out var v) &&
+        (v.ValueKind == JsonValueKind.Number ? v.GetDouble() != 0 : v.GetString() != "MIN"));
+    private static double Pad(JsonElement node, string side) => node.TryGetProperty("padding" + side, out var value) ? value.GetDouble() : 0;
+
+    private static GumElement Content(string name, JsonElement node, string? parent, bool screenRoot = false)
+    {
+        var horizontal = Property(node, "layoutMode", "NONE") == "HORIZONTAL";
+        var values = new List<GumValue> {
+            new("X", "float", Number(Pad(node, "Left"))), new("Y", "float", Number(Pad(node, "Top"))),
+            new("Width", "float", Number(Property(node, "horizontalSizing", "FIXED") == "HUG" ? 0 : -Pad(node, "Left") - Pad(node, "Right"))),
+            new("Height", "float", Number(Property(node, "verticalSizing", "FIXED") == "HUG" ? 0 : -Pad(node, "Top") - Pad(node, "Bottom"))),
+            new("ChildrenLayout", "ChildrenLayout", horizontal ? "2" : "1"),
+            new("StackSpacing", "float", Number(node.TryGetProperty("itemSpacing", out var spacing) ? spacing.GetDouble() : 0))
+        };
+        if (screenRoot)
+        {
+            values[2] = new("Width", "float", Number(node.GetProperty("width").GetDouble() - Pad(node, "Left") - Pad(node, "Right")));
+            values[3] = new("Height", "float", Number(node.GetProperty("height").GetDouble() - Pad(node, "Top") - Pad(node, "Bottom")));
+        }
+        else foreach (var (axis, index) in new[] { ("horizontalSizing", 2), ("verticalSizing", 3) })
+            values.Add(new(index == 2 ? "WidthUnits" : "HeightUnits", "DimensionUnitType", Property(node, axis, "FIXED") == "HUG" ? "4" : "2"));
+        return new(name + "_Content", "Container", parent, true, values);
+    }
+
     private static double Limit(JsonElement node, string key) => node.TryGetProperty(key, out var value) ? value.GetDouble() : key.StartsWith("min", StringComparison.Ordinal) ? 0 : double.PositiveInfinity;
     private static bool HasLimit(JsonElement node) => new[] { "minWidth", "maxWidth", "minHeight", "maxHeight" }.Any(key => node.TryGetProperty(key, out _));
     private static string Number(double n) => (n == 0 ? 0 : n).ToString("R", CultureInfo.InvariantCulture);
 
-    private static List<GumValue> Geometry(JsonElement node, JsonElement? parent = null)
+    private static List<GumValue> Geometry(JsonElement node, JsonElement? parent = null, JsonElement? stackParent = null)
     {
         var result = new List<GumValue>();
         foreach (var (position, size, anchorKey, sizingKey, parentKey, endUnit, centerUnit, origin) in new[] {
@@ -160,6 +239,20 @@ public static class MinimalConverter
             var anchor = Property(node, anchorKey, "MIN");
             var sizing = Property(node, sizingKey, "FIXED");
             var parentExtent = parent?.GetProperty(parentKey).GetDouble() ?? 0;
+            if (stackParent is not null)
+            {
+                var mode = stackParent.Value.GetProperty("layoutMode").GetString();
+                var along = position == "X" ? mode == "HORIZONTAL" : mode == "VERTICAL";
+                if (along) { n = 0; anchor = "MIN"; }
+                else
+                {
+                    var alignment = Property(node, "layoutAlign", "INHERIT");
+                    if (alignment == "INHERIT") alignment = Property(stackParent.Value, "counterAxisAlignItems", "MIN");
+                    anchor = alignment;
+                    parentExtent -= position == "X" ? Pad(stackParent.Value, "Left") + Pad(stackParent.Value, "Right") : Pad(stackParent.Value, "Top") + Pad(stackParent.Value, "Bottom");
+                    n = alignment == "MIN" ? 0 : alignment == "MAX" ? parentExtent - extent : (parentExtent - extent) / 2;
+                }
+            }
             if (anchor == "MAX") n += extent - parentExtent;
             if (anchor == "CENTER") n = n + extent / 2 - parentExtent / 2;
             result.Add(new(position, "float", Number(n)));
@@ -168,9 +261,10 @@ public static class MinimalConverter
                 result.Add(new(origin, origin == "XOrigin" ? "HorizontalAlignment" : "VerticalAlignment", anchor == "MAX" ? "2" : "1"));
                 result.Add(new(position + "Units", "PositionUnitType", anchor == "MAX" ? endUnit : centerUnit));
             }
-            var dimension = sizing == "FILL" ? extent - parentExtent : extent;
+            var dimension = sizing == "FILL" ? extent - parentExtent :
+                sizing == "HUG" ? (position == "X" ? Pad(node, "Right") : Pad(node, "Bottom")) : extent;
             result.Add(new(size, "float", Number(dimension)));
-            if (sizing == "FILL") result.Add(new(size + "Units", "DimensionUnitType", "2"));
+            if (sizing == "FILL" || sizing == "HUG") result.Add(new(size + "Units", "DimensionUnitType", sizing == "HUG" ? "4" : "2"));
             foreach (var prefix in new[] { "min", "max" })
                 if (node.TryGetProperty(prefix + size, out var limit))
                     result.Add(new(char.ToUpperInvariant(prefix[0]) + prefix[1..] + size, "float?", Number(limit.GetDouble())));

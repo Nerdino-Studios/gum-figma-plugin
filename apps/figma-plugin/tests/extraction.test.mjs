@@ -160,6 +160,64 @@ test('child fixed/fill anchors and limits retain semantics and reject incompatib
   }
 });
 
+test('nested auto layout captures spacing, asymmetric padding, alignment and hug in v1.2', async () => {
+  const api = { getImageByHash: () => null };
+  const inner = { ...frame('inner', 'Inner', [frame('leaf', 'Leaf')]), layoutMode: 'VERTICAL',
+    layoutSizingHorizontal: 'HUG', layoutSizingVertical: 'HUG', paddingLeft: 3, paddingRight: 9,
+    paddingTop: 4, paddingBottom: 8, itemSpacing: 5, layoutAlign: 'MAX' };
+  const outer = { ...frame('outer', 'Outer', [inner]), layoutMode: 'HORIZONTAL', itemSpacing: 7,
+    paddingLeft: 11, paddingRight: 19, paddingTop: 13, paddingBottom: 17, counterAxisAlignItems: 'CENTER' };
+  const result = await captureSelection([frame('root', 'Root', [outer])], 'ns', api);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(validateContract('snapshot', result.snapshot), true);
+  assert.equal(result.snapshot.schemaVersion.minor, 2);
+  assert.equal(validateContract('snapshot', { ...result.snapshot, schemaVersion: { major: 1, minor: 1 } }), false);
+  assert.equal(result.snapshot.nodes[1].paddingRight, 19);
+  assert.equal(result.snapshot.nodes[2].horizontalSizing, 'HUG');
+  assert.equal(result.snapshot.nodes[2].layoutAlign, 'MAX');
+  const changed = await captureSelection([frame('root', 'Root', [{ ...outer, paddingRight: 20 }])], 'ns', api);
+  assert.notEqual(result.snapshot.snapshotId, changed.snapshot.snapshotId);
+  const invalid = await captureSelection([frame('root', 'Root', [{ ...outer, paddingLeft: -1 }])], 'ns', api);
+  assert.equal(invalid.snapshot, null);
+  assert.ok(invalid.diagnostics.some(d => d.property === 'paddingLeft'));
+});
+
+test('ordinary Figma layout defaults do not block a plain frame', async () => {
+  const defaults = { ...frame('root', 'Root'), itemSpacing: 0, paddingLeft: 0, paddingRight: 0,
+    paddingTop: 0, paddingBottom: 0, layoutAlign: 'INHERIT', primaryAxisAlignItems: 'MIN',
+    counterAxisAlignItems: 'MIN', layoutWrap: 'NO_WRAP' };
+  const result = await captureSelection([defaults], 'ns', { getImageByHash: () => null });
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.snapshot.schemaVersion.minor, 0);
+});
+
+test('cross-axis STRETCH lowers as fill; unsupported main-axis distribution and wrapping block', async () => {
+  const api = { getImageByHash: () => null };
+  const child = { ...frame('child', 'Child'), layoutSizingHorizontal: 'FILL', layoutAlign: 'STRETCH' };
+  const stack = { ...frame('stack', 'Stack', [child]), layoutMode: 'VERTICAL' };
+  const result = await captureSelection([frame('root', 'Root', [stack])], 'ns', api);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.snapshot.nodes[2].horizontalSizing, 'FILL');
+  assert.equal(result.snapshot.nodes[2].horizontalAnchor, 'STRETCH');
+  for (const field of [{ primaryAxisAlignItems: 'MAX' }, { layoutWrap: 'WRAP' }]) {
+    const invalid = await captureSelection([frame('root', 'Root', [{ ...stack, ...field }])], 'ns', api);
+    assert.equal(invalid.snapshot, null);
+    assert.ok(invalid.diagnostics.some(d => d.property in field));
+  }
+});
+
+test('absolute-positioned children cannot silently enter stack flow or share the AUTO hash', async () => {
+  const api = { getImageByHash: () => null };
+  const child = { ...frame('child', 'Child'), x: 77, y: 23, layoutPositioning: 'AUTO' };
+  const parent = { ...frame('stack', 'Stack', [child]), layoutMode: 'HORIZONTAL' };
+  const supported = await captureSelection([frame('root', 'Root', [parent])], 'ns', api);
+  assert.ok(supported.snapshot);
+  const absolute = await captureSelection([frame('root', 'Root', [{ ...parent,
+    children: [{ ...child, layoutPositioning: 'ABSOLUTE' }] }])], 'ns', api);
+  assert.equal(absolute.snapshot, null);
+  assert.ok(absolute.diagnostics.some(d => d.nodeId === 'child' && d.property === 'layoutPositioning'));
+});
+
 test('budget never reads descendants beyond bounded depth or node count', async () => {
   const root = frame('root', 'Root');
   Object.defineProperty(root, 'children', { get() { throw Error('read outside depth budget'); } });
