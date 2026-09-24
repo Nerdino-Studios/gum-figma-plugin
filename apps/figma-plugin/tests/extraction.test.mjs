@@ -1,11 +1,54 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readSelectedRoots } from '../src/document/selection.ts';
 import { captureSelection, canonicalize, hashBytes } from '../src/document/extraction.ts';
+import { encodeUtf8 } from '../src/document/utf8.ts';
 import { validateContract } from '../src/transport/contracts.ts';
 
 const frame = (id, name, children = []) => ({ id, name, type: 'FRAME', x: 0, y: -0, width: 120, height: 50, visible: true, layoutMode: 'NONE', clipsContent: false, children, fills: [] });
 const text = (id) => ({ id, name: 'Label', type: 'TEXT', x: 2, y: 3, width: 30, height: 12, visible: true, characters: 'Hello', fontSize: 12, fontName: { family: 'Inter', style: 'Regular' }, fills: [] });
+
+test('scene UTF-8 matches TextEncoder for ASCII, Unicode and malformed UTF-16', () => {
+  for (const input of ['', 'ASCII', 'Café 😀', '\0\u007f\u0080\u07ff\u0800\uffff', '\ud800', '\udc00', '\ud800A\udc00', '\ud800\udc00', '\udbff\udfff', '\ud800\ud800\udc00']) {
+    assert.deepEqual(encodeUtf8(input), new TextEncoder().encode(input), JSON.stringify(input));
+  }
+  assert.equal(hashBytes(encodeUtf8('"ASCII"')), 'sha256:8d8086de6994d1bb23d5e440929193b78719ce686c6e88247877f8411c51905d');
+  assert.equal(hashBytes(encodeUtf8('"Café 😀"')), 'sha256:1c8e1a60f5bbeb857465f51d2fc1464c4f1a101f7f05b43357fd86651df19ce3');
+  const original = globalThis.TextEncoder;
+  try {
+    globalThis.TextEncoder = undefined;
+    assert.deepEqual(encodeUtf8('\ud800\udc00\ud800A\udc00'), Uint8Array.from([0xf0, 0x90, 0x80, 0x80, 0xef, 0xbf, 0xbd, 0x41, 0xef, 0xbf, 0xbd]));
+  } finally { globalThis.TextEncoder = original; }
+});
+
+test('scene hash retains published JS/C# Unicode wire vector', () => {
+  // PublicationTests.JavascriptUnicodeAndNumberVectorAndSequentialTransfers validates this ID in C#.
+  const semantic = { documentNamespace: 'design-1', selectedRootIds: ['1:2'], rootAliases: [{ rootId: '1:2', alias: 'Main' }],
+    nodes: [{ id: '1:2', parentId: null, type: 'FRAME', name: '😀', x: 1e-7, y: 1e-6, width: 100, height: 100, visible: true, layoutMode: 'NONE', clipsContent: false }] };
+  assert.equal(hashBytes(encodeUtf8(canonicalize(semantic))), 'sha256:4f727b77f8b0ec2756d1b9378e0bcd9e9010d5a8be841f53412e7ed6fdf4cba5');
+});
+
+test('scene capture without TextEncoder retains canonical JS/C# snapshot identity', async () => {
+  const api = { getImageByHash: () => null };
+  const cases = [frame('1:2', 'ASCII'), frame('1:2', '😀'), frame('1:2', 'Café \ud800 end', [text('1:3')])];
+  const expected = await Promise.all(cases.map(root => captureSelection([root], 'design-1', api, {}, { '1:2': 'Main' })));
+  const original = globalThis.TextEncoder;
+  try {
+    globalThis.TextEncoder = undefined;
+    for (const [index, root] of cases.entries()) {
+      const result = await captureSelection([root], 'design-1', api, {}, { '1:2': 'Main' });
+      assert.deepEqual(result.diagnostics, []);
+      assert.ok(result.snapshot);
+      assert.equal(validateContract('snapshot', result.snapshot), true);
+      assert.equal(result.snapshot.snapshotId, expected[index].snapshot.snapshotId);
+      const { snapshotId, schemaVersion, ...semantic } = result.snapshot;
+      assert.equal(snapshotId, 'sha256:' + createHash('sha256').update(canonicalize(semantic), 'utf8').digest('hex'));
+    }
+  } finally {
+    globalThis.TextEncoder = original;
+  }
+});
 
 test('selection retains identity, detects unsupported roots and ignores display name for alias', () => {
   const selected = [frame('1:2', 'Renamed'), { id: '3:4', name: 'Oval', type: 'ELLIPSE' }];

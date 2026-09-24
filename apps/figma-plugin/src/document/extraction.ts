@@ -1,6 +1,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { readSelectedRoots, type ExtractionDiagnostic } from './selection.ts';
+import { encodeUtf8 } from './utf8.ts';
 
 export interface SourceNode {
   id: string; name: string; type: string; x: number; y: number; width: number; height: number; visible: boolean;
@@ -38,7 +39,7 @@ export function canonicalize(value: unknown): string {
   }
   throw new Error('Unsupported canonical value');
 }
-const hash = (value: unknown) => hashBytes(utf8ToBytes(canonicalize(value)));
+const hash = (value: unknown) => hashBytes(encodeUtf8(canonicalize(value)));
 const limits = { maxNodes: 256, maxDepth: 16, maxAssetBytes: 4 * 1024 * 1024 };
 
 // Scene-only adapter: callers supply their persisted namespace; never use fileKey or a local path.
