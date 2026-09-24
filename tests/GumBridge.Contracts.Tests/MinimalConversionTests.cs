@@ -43,7 +43,7 @@ public sealed class MinimalConversionTests
         Assert.False(screen.Elements[1].Visible);
         var first = GumModelSerializer.Serialize(screen);
         Assert.Equal(first, GumModelSerializer.Serialize(MinimalConverter.Convert(doc.RootElement, Assets).Screens[0]));
-        Assert.Equal("4acce25ebd14eefc62da3e52959df0d18367fb07da24792a52fc7f250c9975a8", Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(first))));
+        Assert.Equal("068ab56806fc776dd29a1b40b32a3ae9bfe9afb213e74e69d8652ce3953fc086", Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(first))));
         Assert.Contains("Hi &amp; &lt;Gum&gt;", first);
         Assert.Equal("Assets/Images/55402597b0967d51bad953e5f7d480e6b4773bd155d39e6ecf36da9404c5503f.png",
             screen.Elements[3].Values.Single(v => v.Name == "SourceFile").Value);
@@ -168,7 +168,6 @@ public sealed class MinimalConversionTests
     [InlineData("\"clipsContent\":false", "\"clipsContent\":true", "UNSUPPORTED_FEATURE")]
     [InlineData("\"fontFamily\":\"Arial\"", "\"fontFamily\":\"Unknown\"", "MISSING_FONT")]
     [InlineData("\"parentId\":\"root\",\"type\":\"IMAGE\"", "\"parentId\":\"missing\",\"type\":\"IMAGE\"", "INVALID_SNAPSHOT")]
-    [InlineData("\"width\":64,\"height\":64", "\"width\":100,\"height\":64", "UNSUPPORTED_FEATURE")]
     public void UnsupportedOrBrokenInputsAreBlocked(string before, string after, string code)
     {
         using var doc = JsonDocument.Parse(Snapshot.Replace(before, after, StringComparison.Ordinal));

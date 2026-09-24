@@ -83,6 +83,7 @@
         "clipsContent": {
           "type": "boolean"
         },
+        "rotation": { "type": "number" },
         "characters": {
           "type": "string"
         },
@@ -95,10 +96,11 @@
           "pattern": "^sha256:[0-9a-f]{64}$"
         },
         "scaleMode": {
-          "enum": [
-            "FIT",
-            "FILL"
-          ]
+          "enum": ["FIT", "FILL", "CROP"]
+        },
+        "imageTransform": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } }
         },
         "fontFamily": {
           "$ref": "#/$defs/text"
@@ -156,7 +158,8 @@
                   "required": [
                     "fontStyle"
                   ]
-                }
+                },
+                { "required": ["imageTransform"] }
               ]
             }
           }
@@ -199,7 +202,8 @@
                   ]
                 },
                 { "required": ["itemSpacing"] }, { "required": ["paddingLeft"] }, { "required": ["paddingRight"] },
-                { "required": ["paddingTop"] }, { "required": ["paddingBottom"] }, { "required": ["counterAxisAlignItems"] }
+                { "required": ["paddingTop"] }, { "required": ["paddingBottom"] }, { "required": ["counterAxisAlignItems"] },
+                { "required": ["imageTransform"] }
               ]
             }
           }
@@ -216,6 +220,10 @@
             "required": [
               "imageHash",
               "scaleMode"
+            ],
+            "allOf": [
+              { "if": { "properties": { "scaleMode": { "const": "CROP" } }, "required": ["scaleMode"] },
+                "then": { "required": ["imageTransform"] }, "else": { "not": { "required": ["imageTransform"] } } }
             ],
             "not": {
               "anyOf": [

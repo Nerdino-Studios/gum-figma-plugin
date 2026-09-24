@@ -15,7 +15,7 @@ export interface SourceNode {
   fontName?: unknown; effects?: readonly unknown[]; strokes?: readonly unknown[];
   itemSpacing?: number; paddingLeft?: number; paddingRight?: number; paddingTop?: number; paddingBottom?: number;
   counterAxisAlignItems?: string; primaryAxisAlignItems?: string; layoutWrap?: string; layoutAlign?: string; layoutPositioning?: string;
-  rotation?: number; opacity?: number; layoutSizingHorizontal?: string; layoutSizingVertical?: string;
+  rotation?: number; relativeTransform?: readonly (readonly number[])[]; opacity?: number; layoutSizingHorizontal?: string; layoutSizingVertical?: string;
   constraints?: { horizontal: string; vertical: string };
   minWidth?: number | null; maxWidth?: number | null; minHeight?: number | null; maxHeight?: number | null;
 }
@@ -23,10 +23,11 @@ export interface DesignNode {
   id: string; parentId: string | null; type: 'FRAME' | 'TEXT' | 'IMAGE'; name: string;
   x: number; y: number; width: number; height: number; visible: boolean;
   layoutMode?: string; clipsContent?: boolean; characters?: string; fontSize?: number; fontFamily?: string; fontStyle?: string; color?: string; imageHash?: string; scaleMode?: string;
+  imageTransform?: readonly (readonly number[])[];
   horizontalSizing?: 'FILL' | 'HUG'; verticalSizing?: 'FILL' | 'HUG'; horizontalAnchor?: 'MAX' | 'CENTER' | 'STRETCH'; verticalAnchor?: 'MAX' | 'CENTER' | 'STRETCH';
   minWidth?: number; maxWidth?: number; minHeight?: number; maxHeight?: number;
   itemSpacing?: number; paddingLeft?: number; paddingRight?: number; paddingTop?: number; paddingBottom?: number;
-  counterAxisAlignItems?: 'MIN' | 'CENTER' | 'MAX'; layoutAlign?: 'INHERIT' | 'MIN' | 'CENTER' | 'MAX';
+  counterAxisAlignItems?: 'MIN' | 'CENTER' | 'MAX'; layoutAlign?: 'INHERIT' | 'MIN' | 'CENTER' | 'MAX'; rotation?: number;
 }
 // JSON keys sorted recursively. Reject non-finite numbers before hashing; normalize -0 and CRLF.
 export function canonicalize(value: unknown): string {
@@ -85,7 +86,7 @@ export async function captureSelection(
     paddingTop: node.paddingTop ?? null, paddingBottom: node.paddingBottom ?? null,
     counterAxisAlignItems: node.counterAxisAlignItems ?? null, primaryAxisAlignItems: node.primaryAxisAlignItems ?? null,
     layoutWrap: node.layoutWrap ?? null, layoutAlign: node.layoutAlign ?? null,
-    layoutPositioning: node.layoutPositioning ?? null, rotation: node.rotation ?? null,
+    layoutPositioning: node.layoutPositioning ?? null, rotation: node.rotation ?? null, relativeTransform: node.relativeTransform ?? null,
     opacity: node.opacity ?? null, layoutSizingHorizontal: node.layoutSizingHorizontal ?? null,
     layoutSizingVertical: node.layoutSizingVertical ?? null,
     constraints: node.constraints ?? null, minWidth: node.minWidth ?? null, maxWidth: node.maxWidth ?? null,
@@ -109,7 +110,21 @@ export async function captureSelection(
     if (!node.id || !node.name) { fail(node, 'identity', 'Source ID and display name are required'); return; }
     if (!['FRAME', 'TEXT', 'RECTANGLE'].includes(node.type)) { fail(node, 'type', `Unsupported node: ${node.type}`); return; }
     if ((node.effects?.length ?? 0) > 0 || (node.strokes?.length ?? 0) > 0) fail(node, 'effects/strokes', 'Effects and strokes are not supported');
-    if (node.rotation && node.rotation !== 0) fail(node, 'rotation', 'Rotated nodes are not supported');
+    const rotated = node.rotation !== undefined && node.rotation !== 0;
+    if (rotated && (node.type === 'TEXT' || node.type === 'FRAME' && (node.children?.length ?? 0) > 0 || parentId === null))
+      fail(node, 'rotation', 'Rotated text or interactive container has unverified hit-test geometry');
+    if (node.rotation !== undefined && (!Number.isFinite(node.rotation) || Math.abs(node.rotation) > 180))
+      fail(node, 'rotation', 'Rotation must be finite and within Figma node range');
+    const matrix = node.relativeTransform;
+    if (matrix !== undefined) {
+      const valid = matrix.length === 2 && matrix.every(row => row.length === 3 && row.every(Number.isFinite));
+      const radians = (node.rotation ?? 0) * Math.PI / 180;
+      if (!valid || Math.abs(matrix[0][0] - Math.cos(radians)) > 0.00001 ||
+        Math.abs(matrix[0][1] - Math.sin(radians)) > 0.00001 ||
+        Math.abs(matrix[1][0] + Math.sin(radians)) > 0.00001 ||
+        Math.abs(matrix[1][1] - Math.cos(radians)) > 0.00001)
+        fail(node, 'relativeTransform', 'Skew, scale and flip transforms are unsupported; do not flatten interactive geometry');
+    }
     if (node.opacity !== undefined && node.opacity !== 1) fail(node, 'opacity', 'Non-opaque nodes are not supported');
     if (node.cornerRadius !== undefined && node.cornerRadius !== 0) fail(node, 'cornerRadius', 'Rounded corners are not captured');
     if (node.rectangleCornerRadii?.some(radius => radius !== 0)) fail(node, 'rectangleCornerRadii', 'Rounded corners are not captured');
@@ -199,13 +214,18 @@ export async function captureSelection(
       !solid.color || ![solid.color.r, solid.color.g, solid.color.b].every(v => Number.isFinite(v) && v >= 0 && v <= 1))) {
       fail(node, 'fills', 'Solid fill must have opaque finite RGB');
     }
-    if (node.type === 'RECTANGLE' && (fill.length !== 1 || fill[0].type !== 'IMAGE' || !fill[0].imageHash || !['FIT', 'FILL'].includes(fill[0].scaleMode ?? ''))) {
+    if (node.type === 'RECTANGLE' && (fill.length !== 1 || fill[0].type !== 'IMAGE' || !fill[0].imageHash || !['FIT', 'FILL', 'CROP'].includes(fill[0].scaleMode ?? ''))) {
       fail(node, 'fills', 'Rectangle requires a FIT/FILL raster image'); return;
     }
     if (node.type === 'RECTANGLE' && (node.constraints?.horizontal === 'STRETCH' || node.constraints?.vertical === 'STRETCH' ||
       ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => node[key as keyof SourceNode] != null)))
       fail(node, 'constraints', 'Responsive image dimensions and limits require verified FIT/FILL aspect-ratio rendering');
-    if (node.type === 'RECTANGLE' && fill[0]?.imageTransform) fail(node, 'fills.imageTransform', 'Image crop/transform is not captured');
+    if (node.type === 'RECTANGLE' && fill[0]?.scaleMode === 'CROP') {
+      const matrix = fill[0].imageTransform;
+      if (!Array.isArray(matrix) || matrix.length !== 2 || !matrix.every(row => Array.isArray(row) && row.length === 3 && row.every(Number.isFinite)))
+        fail(node, 'fills.imageTransform', 'CROP requires a finite 2x3 image transform');
+    } else if (node.type === 'RECTANGLE' && fill[0]?.imageTransform)
+      fail(node, 'fills.imageTransform', 'Only CROP may specify an image transform');
     if (node.type === 'TEXT' && (typeof node.fontSize !== 'number' || !Number.isFinite(node.fontSize) || node.fontSize <= 0 || typeof node.characters !== 'string' || !(typeof node.fontName === 'object' && node.fontName !== null && 'family' in node.fontName && 'style' in node.fontName && typeof node.fontName.family === 'string' && typeof node.fontName.style === 'string')))  {
       fail(node, 'text', 'Text requires uniform style and characters'); return;
     }
@@ -235,8 +255,10 @@ export async function captureSelection(
       } : {}),
       ...(parent?.layoutMode && parent.layoutMode !== 'NONE' && node.layoutAlign && node.layoutAlign !== 'INHERIT' && node.layoutAlign !== 'STRETCH' ?
         { layoutAlign: node.layoutAlign as 'MIN' | 'CENTER' | 'MAX' } : {}),
+      ...(rotated && Number.isFinite(node.rotation) ? { rotation: node.rotation } : {}),
       ...(node.type === 'TEXT' ? { characters: node.characters!, fontSize: node.fontSize as number, fontFamily: (node.fontName as { family: string }).family, fontStyle: (node.fontName as { style: string }).style } : {}),
-      ...(node.type === 'RECTANGLE' && fill[0]?.imageHash ? { scaleMode: fill[0].scaleMode } : {}),
+      ...(node.type === 'RECTANGLE' && fill[0]?.imageHash ? { scaleMode: fill[0].scaleMode,
+        ...(fill[0].scaleMode === 'CROP' && Array.isArray(fill[0].imageTransform) ? { imageTransform: fill[0].imageTransform as readonly (readonly number[])[] } : {}) } : {}),
     };
     nodes.push(output);
     if (node.type === 'RECTANGLE' && fill[0]?.imageHash) pending.push({ node: output, sourceHash: fill[0].imageHash });
@@ -275,6 +297,7 @@ export async function captureSelection(
   const layout = nodes.some(node => node.layoutMode !== undefined && node.layoutMode !== 'NONE' ||
     node.horizontalSizing === 'HUG' || node.verticalSizing === 'HUG' ||
     ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign'].some(key => key in node));
-  const responsive = nodes.some(node => ['horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => key in node));
-  return { snapshot: { schemaVersion: { major: 1, minor: layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
+  const geometry = nodes.some(node => node.clipsContent || node.rotation !== undefined || node.scaleMode === 'CROP');
+  const responsive = nodes.some(node => ['horizontalSizing' , 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => key in node));
+  return { snapshot: { schemaVersion: { major: 1, minor: geometry ? 3 : layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
 }

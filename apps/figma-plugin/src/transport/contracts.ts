@@ -25,7 +25,7 @@ function validNode(value: unknown): boolean {
   const required = ['id', 'parentId', 'type', 'name', 'x', 'y', 'width', 'height', 'visible'];
   const optional = ['layoutMode', 'clipsContent', 'characters', 'fontSize', 'fontFamily', 'fontStyle', 'color', 'imageHash', 'scaleMode',
     'horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight',
-    'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign'];
+    'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign', 'rotation', 'imageTransform'];
   if (!required.every(key => Object.hasOwn(value, key)) || !Object.keys(value).every(key => [...required, ...optional].includes(key))) return false;
   if (!text(value.id) || !(value.parentId === null || text(value.parentId)) || !text(value.name) || typeof value.visible !== 'boolean' ||
       !['FRAME', 'TEXT', 'IMAGE'].includes(value.type as string) ||
@@ -35,6 +35,9 @@ function validNode(value: unknown): boolean {
     horizontalAnchor: ['MIN', 'MAX', 'CENTER', 'STRETCH'], verticalAnchor: ['MIN', 'MAX', 'CENTER', 'STRETCH'] })) {
     if (Object.hasOwn(value, key) && !allowed.includes(value[key] as string)) return false;
   }
+  if (Object.hasOwn(value, 'imageTransform') && (!Array.isArray(value.imageTransform) || value.imageTransform.length !== 2 ||
+    !value.imageTransform.every(row => Array.isArray(row) && row.length === 3 && row.every(n => typeof n === 'number' && Number.isFinite(n))))) return false;
+  if (Object.hasOwn(value, 'rotation') && (typeof value.rotation !== 'number' || !Number.isFinite(value.rotation))) return false;
   for (const key of ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'])
     if (Object.hasOwn(value, key) && (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || (value[key] as number) < 0)) return false;
   for (const key of ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom'])
@@ -42,12 +45,13 @@ function validNode(value: unknown): boolean {
   for (const [key, allowed] of Object.entries({ counterAxisAlignItems: ['MIN', 'CENTER', 'MAX'], layoutAlign: ['INHERIT', 'MIN', 'CENTER', 'MAX'] }))
     if (Object.hasOwn(value, key) && !allowed.includes(value[key] as string)) return false;
   switch (value.type) {
-    case 'FRAME': return !['characters', 'fontSize', 'fontFamily', 'fontStyle', 'imageHash', 'scaleMode'].some(key => Object.hasOwn(value, key)) &&
+    case 'FRAME': return !['characters', 'fontSize', 'fontFamily', 'fontStyle', 'imageHash', 'scaleMode', 'imageTransform'].some(key => Object.hasOwn(value, key)) &&
       ['NONE', 'HORIZONTAL', 'VERTICAL'].includes(value.layoutMode as string) && typeof value.clipsContent === 'boolean';
-    case 'TEXT': return !['layoutMode', 'clipsContent', 'imageHash', 'scaleMode', 'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems'].some(key => Object.hasOwn(value, key)) &&
+    case 'TEXT': return !['layoutMode', 'clipsContent', 'imageHash', 'scaleMode', 'imageTransform', 'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems'].some(key => Object.hasOwn(value, key)) &&
       typeof value.characters === 'string' && text(value.fontFamily) && text(value.fontStyle) && typeof value.fontSize === 'number' && Number.isFinite(value.fontSize) && value.fontSize > 0;
     case 'IMAGE': return !['layoutMode', 'clipsContent', 'characters', 'fontSize', 'fontFamily', 'fontStyle', 'color', 'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems'].some(key => Object.hasOwn(value, key)) &&
-      typeof value.imageHash === 'string' && /^sha256:[0-9a-f]{64}$/.test(value.imageHash) && ['FIT', 'FILL'].includes(value.scaleMode as string);
+      typeof value.imageHash === 'string' && /^sha256:[0-9a-f]{64}$/.test(value.imageHash) && ['FIT', 'FILL', 'CROP'].includes(value.scaleMode as string) &&
+      Object.hasOwn(value, 'imageTransform') === (value.scaleMode === 'CROP');
     default: return false;
   }
 }
@@ -88,7 +92,9 @@ export function validateContract(kind: string, value: unknown): boolean {
         value.nodes.every(node => record(node) && !['horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => Object.hasOwn(node, key)))) &&
       ((version.minor as number) >= 2 || value.nodes.every(node => record(node) &&
         !['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign'].some(key => Object.hasOwn(node, key)) &&
-        node.horizontalSizing !== 'HUG' && node.verticalSizing !== 'HUG'));
+        node.horizontalSizing !== 'HUG' && node.verticalSizing !== 'HUG')) &&
+      ((version.minor as number) >= 3 || value.nodes.every(node => record(node) &&
+        !Object.hasOwn(node, 'rotation') && !Object.hasOwn(node, 'imageTransform')));
     case 'catalog': return text(value.catalogId) && text(value.revision) &&
       Array.isArray(value.controls) && value.controls.length === 0;
     case 'diagnostic': return text(value.code) && text(value.message) &&

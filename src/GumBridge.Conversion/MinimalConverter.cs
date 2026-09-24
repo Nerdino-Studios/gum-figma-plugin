@@ -13,7 +13,7 @@ public sealed record GumValue(string Name, string Type, string Value);
 public sealed record GumScreen(string Name, IReadOnlyList<GumElement> Elements);
 public sealed record ConversionResult(IReadOnlyList<GumScreen> Screens, IReadOnlyList<ConversionDiagnostic> Diagnostics);
 
-/// <summary>Pure lowering of the v1 unrotated subset; unsupported layout combinations block output.</summary>
+/// <summary>Pure lowering of the supported v1 geometry subset; unsafe combinations block output.</summary>
 public static class MinimalConverter
 {
     public static ConversionResult Convert(JsonElement snapshot, IReadOnlyDictionary<string, (double Width, double Height)>? imageDimensions = null)
@@ -63,8 +63,11 @@ public static class MinimalConverter
                 errors.Add(new("INVALID_SNAPSHOT", id, "Geometry exceeds native Gum float range"));
             if (type == "FRAME" && node.GetProperty("layoutMode").GetString() != "NONE" && snapshot.GetProperty("schemaVersion").GetProperty("minor").GetInt32() < 2)
                 errors.Add(new("UNSUPPORTED_FEATURE", id, "Auto layout requires v1.2 capture with verified spacing and alignment"));
-            if (type == "FRAME" && node.GetProperty("clipsContent").GetBoolean())
-                errors.Add(new("UNSUPPORTED_FEATURE", id, "Clipping requires a later conversion rule"));
+            if (type == "FRAME" && id == roots.FirstOrDefault() && node.GetProperty("clipsContent").GetBoolean())
+                errors.Add(new("UNSUPPORTED_FEATURE", id, "Root clipping requires a screen viewport contract"));
+            if (node.TryGetProperty("rotation", out var rotation) && rotation.GetDouble() != 0 &&
+                (id == roots.FirstOrDefault() || type == "TEXT" || type == "FRAME" && nodes.Any(child => child.GetProperty("parentId").ValueKind == JsonValueKind.String && child.GetProperty("parentId").GetString() == id)))
+                errors.Add(new("UNSUPPORTED_FEATURE", id, "Rotated root, text or container with children has unverified interactive hit-test geometry"));
             if (node.TryGetProperty("layoutAlign", out _) && (parentId is null || !byId.TryGetValue(parentId, out var alignedParent) ||
                 !alignedParent.TryGetProperty("layoutMode", out var alignedMode) || alignedMode.GetString() == "NONE"))
                 errors.Add(new("UNSUPPORTED_FEATURE", id, "Per-child alignment requires an auto-layout parent"));
@@ -97,8 +100,10 @@ public static class MinimalConverter
                 var height = node.GetProperty("height").GetDouble();
                 if (imageDimensions is null || !imageDimensions.TryGetValue(hash, out var size) ||
                     !double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width <= 0 || size.Height <= 0 ||
-                    width <= 0 || height <= 0 || Math.Abs(width / height - size.Width / size.Height) > 0.000001)
-                    errors.Add(new("UNSUPPORTED_FEATURE", id, "FIT/FILL requires verified source image dimensions and matching aspect ratio; cropping and letterboxing are not yet supported"));
+                    width <= 0 || height <= 0 || size.Width > int.MaxValue || size.Height > int.MaxValue)
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "Image scaling/crop requires verified positive source dimensions"));
+                else if (Property(node, "scaleMode", "FIT") == "CROP" && !TryCrop(node, size, out _))
+                    errors.Add(new("UNSUPPORTED_FEATURE", id, "CROP requires axis-aligned, in-bounds, integer-pixel source rectangle with matching aspect ratio"));
             }
             foreach (var axis in new[] { (Size: "Width", Position: "X", ParentSize: "width", Anchor: "horizontalAnchor", Sizing: "horizontalSizing"),
                 (Size: "Height", Position: "Y", ParentSize: "height", Anchor: "verticalAnchor", Sizing: "verticalSizing") })
@@ -147,7 +152,7 @@ public static class MinimalConverter
             if (parentId is not null && byId.TryGetValue(parentId, out var layoutParent) && layoutParent.TryGetProperty("layoutMode", out var parentLayout) && parentLayout.GetString() != "NONE")
                 parentName = names[parentId] + "_Content";
             var stackParent = parentId is not null && byId.TryGetValue(parentId, out var gp) && gp.TryGetProperty("layoutMode", out var parentMode) && parentMode.GetString() != "NONE" ? gp : (JsonElement?)null;
-            if (type == "FRAME" && stackParent is null && node.GetProperty("layoutMode").GetString() == "NONE" && node.TryGetProperty("color", out var color))
+            if (type == "FRAME" && stackParent is null && node.GetProperty("layoutMode").GetString() == "NONE" && !node.TryGetProperty("rotation", out _) && node.TryGetProperty("color", out var color))
                 elements.Add(Visual(name + "_Background", "Rectangle", parentName, node.GetProperty("visible").GetBoolean(), node, color.GetString()!, parentId is not null && byId.TryGetValue(parentId, out var visualParent) ? visualParent : null));
             var values = Geometry(node, parentId is not null && byId.TryGetValue(parentId, out var geometryParent) ? geometryParent : null, stackParent);
             if (type == "TEXT")
@@ -156,14 +161,56 @@ public static class MinimalConverter
                 values.Add(new("Font", "string", "Arial"));
                 values.Add(new("FontSize", "int", "24"));
             }
+            if (type == "FRAME" && node.GetProperty("clipsContent").GetBoolean())
+                values.Add(new("ClipsChildren", "bool", "true"));
+            if (node.TryGetProperty("rotation", out var angle) && angle.GetDouble() != 0)
+                values.Add(new("Rotation", "float", Number(angle.GetDouble())));
             if (type == "IMAGE")
             {
                 // The caller must stage the content-addressed image at this exact relative path.
-                values.Add(new("SourceFile", "string", "Assets/Images/" + node.GetProperty("imageHash").GetString()![7..] + ".png"));
+                var hash = node.GetProperty("imageHash").GetString()!;
+                values.Add(new("WidthUnits", "DimensionUnitType", "0"));
+                values.Add(new("HeightUnits", "DimensionUnitType", "0"));
+                values.Add(new("SourceFile", "string", "Assets/Images/" + hash[7..] + ".png"));
                 values.Add(new("TextureAddress", "int", "0"));
+                if (Property(node, "scaleMode", "FIT") == "CROP" && imageDimensions is not null &&
+                    imageDimensions.TryGetValue(hash, out var cropSize) && TryCrop(node, cropSize, out var crop))
+                {
+                    values[^1] = new("TextureAddress", "int", "1");
+                    values.Add(new("TextureLeft", "int", crop.Left.ToString(CultureInfo.InvariantCulture)));
+                    values.Add(new("TextureTop", "int", crop.Top.ToString(CultureInfo.InvariantCulture)));
+                    values.Add(new("TextureWidth", "int", crop.Width.ToString(CultureInfo.InvariantCulture)));
+                    values.Add(new("TextureHeight", "int", crop.Height.ToString(CultureInfo.InvariantCulture)));
+                }
+                if (Property(node, "scaleMode", "FIT") != "CROP" && imageDimensions is not null && imageDimensions.TryGetValue(hash, out var size) &&
+                    size.Width > 0 && size.Height > 0 && node.GetProperty("width").GetDouble() > 0 && node.GetProperty("height").GetDouble() > 0)
+                {
+                    var boxWidth = node.GetProperty("width").GetDouble();
+                    var boxHeight = node.GetProperty("height").GetDouble();
+                    var factor = Property(node, "scaleMode", "FIT") == "FILL"
+                        ? Math.Max(boxWidth / size.Width, boxHeight / size.Height) : Math.Min(boxWidth / size.Width, boxHeight / size.Height);
+                    var scaledWidth = size.Width * factor;
+                    var scaledHeight = size.Height * factor;
+                    if (Math.Abs(scaledWidth - boxWidth) > 0.000001 || Math.Abs(scaledHeight - boxHeight) > 0.000001)
+                    {
+                        if (node.TryGetProperty("rotation", out var imageRotation) && imageRotation.GetDouble() != 0)
+                            errors.Add(new("UNSUPPORTED_FEATURE", id, "Rotated image with FIT/FILL viewport has unverified geometry"));
+                        // Keep the Figma image bounds as a clipping viewport; center the actual sprite.
+                        var viewport = values;
+                        if (Property(node, "scaleMode", "FIT") == "FILL") viewport.Add(new("ClipsChildren", "bool", "true"));
+                        elements.Add(new(name, "Container", parentName, node.GetProperty("visible").GetBoolean(), viewport));
+                        parentName = name;
+                        name += "_Image";
+                        values = new List<GumValue> { new("X", "float", Number((boxWidth - scaledWidth) / 2)),
+                            new("Y", "float", Number((boxHeight - scaledHeight) / 2)),
+                            new("Width", "float", Number(scaledWidth)), new("Height", "float", Number(scaledHeight)),
+                            new("WidthUnits", "DimensionUnitType", "0"), new("HeightUnits", "DimensionUnitType", "0"),
+                            new("SourceFile", "string", "Assets/Images/" + hash[7..] + ".png"), new("TextureAddress", "int", "0") };
+                    }
+                }
             }
             elements.Add(new(name, type == "FRAME" ? "Container" : type == "TEXT" ? "Text" : "Sprite", parentName, node.GetProperty("visible").GetBoolean(), values));
-            if (type == "FRAME" && (stackParent is not null || node.GetProperty("layoutMode").GetString() != "NONE"))
+            if (type == "FRAME" && (stackParent is not null || node.GetProperty("layoutMode").GetString() != "NONE" || node.TryGetProperty("rotation", out _)))
             {
                 if (node.TryGetProperty("color", out var fill))
                     elements.Add(new(name + "_Background", "Rectangle", name, node.GetProperty("visible").GetBoolean(),
@@ -179,6 +226,22 @@ public static class MinimalConverter
         }
         if (errors.Count > 0) return new([], errors);
         return new([new(aliases[roots[0]], elements)], []);
+    }
+
+    private static bool TryCrop(JsonElement node, (double Width, double Height) size, out (int Left, int Top, int Width, int Height) crop)
+    {
+        crop = default;
+        var rows = node.GetProperty("imageTransform").EnumerateArray().ToArray();
+        var x = rows[0].EnumerateArray().Select(v => v.GetDouble()).ToArray();
+        var y = rows[1].EnumerateArray().Select(v => v.GetDouble()).ToArray();
+        if (x[1] != 0 || y[0] != 0 || x[0] <= 0 || y[1] <= 0 || x[2] < 0 || y[2] < 0 ||
+            x[2] + x[0] > 1 + 1e-8 || y[2] + y[1] > 1 + 1e-8 ||
+            Math.Abs(node.GetProperty("width").GetDouble() / node.GetProperty("height").GetDouble() - x[0] * size.Width / (y[1] * size.Height)) > 1e-6)
+            return false;
+        var coordinates = new[] { x[2] * size.Width, y[2] * size.Height, x[0] * size.Width, y[1] * size.Height };
+        if (coordinates.Any(value => value < 0 || value > int.MaxValue || Math.Abs(value - Math.Round(value)) > 1e-6)) return false;
+        crop = ((int)Math.Round(coordinates[0]), (int)Math.Round(coordinates[1]), (int)Math.Round(coordinates[2]), (int)Math.Round(coordinates[3]));
+        return crop.Width > 0 && crop.Height > 0 && crop.Left + (long)crop.Width <= size.Width && crop.Top + (long)crop.Height <= size.Height;
     }
 
     private static GumElement Visual(string name, string type, string? parent, bool visible, JsonElement node, string color, JsonElement? geometryParent = null, bool screenOrigin = false)

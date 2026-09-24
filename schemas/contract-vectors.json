@@ -847,5 +847,44 @@
       ],
       "nodes": []
     }
+  },
+  {
+    "name": "v1.3 image crop",
+    "kind": "snapshot",
+    "valid": true,
+    "value": {
+      "schemaVersion": { "major": 1, "minor": 3 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
+      "nodes": [
+        { "id": "root", "parentId": null, "type": "FRAME", "name": "Root", "x": 0, "y": 0, "width": 40, "height": 20, "visible": true, "layoutMode": "NONE", "clipsContent": false },
+        { "id": "image", "parentId": "root", "type": "IMAGE", "name": "Crop", "x": 0, "y": 0, "width": 40, "height": 20, "visible": true, "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "scaleMode": "CROP", "imageTransform": [[0.5, 0, 0.25], [0, 0.25, 0.25]] }
+      ]
+    }
+  },
+  {
+    "name": "crop needs v1.3",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": { "major": 1, "minor": 2 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [],
+      "nodes": [
+        { "id": "root", "parentId": null, "type": "FRAME", "name": "Root", "x": 0, "y": 0, "width": 40, "height": 20, "visible": true, "layoutMode": "NONE", "clipsContent": false },
+        { "id": "image", "parentId": "root", "type": "IMAGE", "name": "Crop", "x": 0, "y": 0, "width": 40, "height": 20, "visible": true, "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "scaleMode": "CROP", "imageTransform": [[0.5, 0, 0.25], [0, 0.25, 0.25]] }
+      ]
+    }
+  },
+  {
+    "name": "invalid crop scale mode type",
+    "kind": "snapshot",
+    "valid": false,
+    "value": {
+      "schemaVersion": { "major": 1, "minor": 3 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
+      "nodes": [
+        { "id": "root", "parentId": null, "type": "FRAME", "name": "Root", "x": 0, "y": 0, "width": 40, "height": 20, "visible": true, "layoutMode": "NONE", "clipsContent": false },
+        { "id": "image", "parentId": "root", "type": "IMAGE", "name": "Crop", "x": 0, "y": 0, "width": 40, "height": 20, "visible": true, "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "scaleMode": 42, "imageTransform": [[0.5, 0, 0.25], [0, 0.25, 0.25]] }
+      ]
+    }
   }
 ]

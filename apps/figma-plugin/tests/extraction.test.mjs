@@ -86,6 +86,26 @@ test('capture bounded subtree, image bytes and semantic hash independent of sele
   assert.equal(validateContract('snapshot', colors.snapshot), true);
 });
 
+test('captures clipping, axis-aligned crop and leaf rotation; diagnoses skew and interactive rotation', async () => {
+  const api = { getImageByHash: () => ({ getBytesAsync: async () => new Uint8Array([1, 2, 3]) }) };
+  const img = { id: 'img', name: 'Crop', type: 'RECTANGLE', x: 0, y: 0, width: 40, height: 20, visible: true,
+    rotation: 15, relativeTransform: [[Math.cos(Math.PI / 12), Math.sin(Math.PI / 12), 0], [-Math.sin(Math.PI / 12), Math.cos(Math.PI / 12), 0]],
+    fills: [{ type: 'IMAGE', imageHash: 'h', scaleMode: 'CROP', imageTransform: [[0.5, 0, 0.25], [0, 0.25, 0.25]] }] };
+  const root = frame('root', 'Root', [frame('box', 'Box', [img])]);
+  root.children[0].clipsContent = true;
+  const result = await captureSelection([root], 'ns', api);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.snapshot.schemaVersion.minor, 3);
+  assert.equal(result.snapshot.nodes[1].clipsContent, true);
+  assert.equal(result.snapshot.nodes[2].rotation, 15);
+  assert.deepEqual(result.snapshot.nodes[2].imageTransform, img.fills[0].imageTransform);
+  assert.equal(validateContract('snapshot', result.snapshot), true);
+  const skewed = { ...img, relativeTransform: [[1, 0.2, 0], [0, 1, 0]] };
+  assert.ok((await captureSelection([frame('root', 'Root', [skewed])], 'ns', api)).diagnostics.some(d => d.property === 'relativeTransform'));
+  const interactive = { ...root.children[0], rotation: 15 };
+  assert.ok((await captureSelection([frame('root', 'Root', [interactive])], 'ns', api)).diagnostics.some(d => d.property === 'rotation'));
+});
+
 test('capture rejects excess depth, unsupported properties, missing assets and changed sources', async () => {
   const api = { getImageByHash: () => null };
   assert.ok((await captureSelection([frame('a', 'A', [frame('b', 'B')])], 'ns', api, { maxDepth: 0 })).diagnostics.some(d => d.code === 'UNSUPPORTED_FEATURE'));
