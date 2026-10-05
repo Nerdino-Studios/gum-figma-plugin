@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -13,6 +14,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using GumBridge.Infrastructure.Storage;
+using GumBridge.Infrastructure.Gum;
 
 namespace GumBridge.Host;
 
@@ -24,6 +26,7 @@ public sealed class PairingHost : IAsyncDisposable
     private readonly PublicationStore publicationStore;
     private readonly PreviewStore previewStore;
     private readonly PreviewOperation previewOperation;
+    private readonly RuntimeOperation runtimeOperation;
     private readonly object mutationLock = new();
     private readonly System.Threading.SemaphoreSlim previewLock = new(1, 1);
     private readonly string dataDirectory;
@@ -31,7 +34,8 @@ public sealed class PairingHost : IAsyncDisposable
     private readonly FileStream ownershipLock;
     private readonly Func<DateTimeOffset> utcNow;
     public string Address { get; private set; } = "";
-    private PairingHost(WebApplication app, Func<DateTimeOffset> utcNow, string dataDirectory, FileStream ownershipLock, Func<string, string[], Task>? previewToolRunner)
+    private PairingHost(WebApplication app, Func<DateTimeOffset> utcNow, string dataDirectory, FileStream ownershipLock, Func<string, string[], Task>? previewToolRunner,
+        Func<PreparedDesign, Task<IRuntimeSession>>? runtimeLauncher)
     {
         this.app = app;
         this.utcNow = utcNow;
@@ -42,9 +46,11 @@ public sealed class PairingHost : IAsyncDisposable
         publicationStore = new PublicationStore(dataDirectory, utcNow);
         previewStore = new PreviewStore(dataDirectory);
         previewOperation = new PreviewOperation(publicationStore, previewStore, previewToolRunner);
+        runtimeOperation = new RuntimeOperation(previewOperation, runtimeLauncher);
     }
 
-    public static async Task<PairingHost> StartAsync(int port = 48931, Func<DateTimeOffset>? utcNow = null, string? localDataDirectory = null, Func<string, string[], Task>? previewToolRunner = null)
+    public static async Task<PairingHost> StartAsync(int port = 48931, Func<DateTimeOffset>? utcNow = null, string? localDataDirectory = null, Func<string, string[], Task>? previewToolRunner = null,
+        Func<PreparedDesign, Task<IRuntimeSession>>? runtimeLauncher = null)
     {
         var data = localDataDirectory ?? WorkspaceCli.DefaultDataDirectory;
         if (Path.Exists(data) && (File.GetAttributes(data) & FileAttributes.ReparsePoint) != 0) throw new IOException("Local data directory must not be linked");
@@ -59,7 +65,7 @@ public sealed class PairingHost : IAsyncDisposable
         builder.Logging.ClearProviders(); // Local request bodies and CLI credentials must not enter normal logs.
         builder.WebHost.UseKestrel(options => { options.Limits.MaxRequestBodySize = 6 * 1024 * 1024; options.Listen(IPAddress.Loopback, port); });
         var app = builder.Build();
-        var host = new PairingHost(app, utcNow ?? (() => DateTimeOffset.UtcNow), data, ownershipLock, previewToolRunner);
+        var host = new PairingHost(app, utcNow ?? (() => DateTimeOffset.UtcNow), data, ownershipLock, previewToolRunner, runtimeLauncher);
         app.Use(async (context, next) =>
         {
             var request = context.Request;
@@ -76,8 +82,8 @@ public sealed class PairingHost : IAsyncDisposable
             }
             var path = request.Path.Value;
             var methodName = request.Method;
-            var pluginRoute = (methodName == "GET" && path is "/v1/workspaces" or "/v1/publications" or "/v1/preview-target" or "/v1/artifacts") ||
-                (methodName == "POST" && path is "/v1/publications/begin" or "/v1/publications/blobs" or "/v1/publications/finalize" or "/v1/previews");
+            var pluginRoute = (methodName == "GET" && path is "/v1/workspaces" or "/v1/publications" or "/v1/preview-target" or "/v1/artifacts" or "/v1/component-catalog" or "/v1/runtime-target") ||
+                (methodName == "POST" && path is "/v1/publications/begin" or "/v1/publications/blobs" or "/v1/publications/finalize" or "/v1/previews" or "/v1/runs");
             var localRoute = methodName == "POST" && (path is "/v1/local/sample" or "/v1/local/register") && origin.Length == 0;
             if (origin.Length > 0 && (path is "/v1/local/sample" or "/v1/local/register")) { context.Response.StatusCode = StatusCodes.Status403Forbidden; return; }
             if (methodName != "OPTIONS" && !pluginRoute && !localRoute) { context.Response.StatusCode = StatusCodes.Status404NotFound; return; }
@@ -92,7 +98,10 @@ public sealed class PairingHost : IAsyncDisposable
                 if (origin.Length == 0 || !((request.Path == "/v1/workspaces" && method == "GET") ||
                     ((request.Path == "/v1/publications/begin" || request.Path == "/v1/publications/blobs" || request.Path == "/v1/publications/finalize") && method == "POST") ||
                     (request.Path == "/v1/publications" && method == "GET") ||
+                    (request.Path == "/v1/component-catalog" && method == "GET") ||
                     (request.Path == "/v1/previews" && method == "POST") ||
+                    (request.Path == "/v1/runs" && method == "POST") ||
+                    (request.Path == "/v1/runtime-target" && method == "GET") ||
                     (request.Path == "/v1/artifacts" && method == "GET") ||
                     (request.Path == "/v1/preview-target" && method == "GET")) ||
                     request.Headers.AccessControlRequestHeaders.ToString().ToLowerInvariant() is not ("" or "content-type"))
@@ -109,6 +118,47 @@ public sealed class PairingHost : IAsyncDisposable
         });
         app.MapGet("/v1/workspaces", (HttpContext context) =>
             Results.Json(new WorkspacesResponse(new SchemaVersion(1, 0), host.workspaceStore.List())));
+        app.MapGet("/v1/runtime-target", (string workspaceId) =>
+        {
+            if (host.workspaceStore.Find(workspaceId) is not { } entry) return Results.NotFound();
+            try { return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), workspaceId, targetHash = RuntimeOperation.TargetHash(entry) }); }
+            catch (Exception e) when (e is IOException or ArgumentException or InvalidOperationException)
+            { return Results.Conflict(new { code = "FRB2_TARGET_UNAVAILABLE", stage = "runtime target", details = "Use a registered Sample workspace with the bundled FRB2 runtime." }); }
+        });
+        app.MapPost("/v1/runs", async (RuntimeRequest request) =>
+        {
+            if (request.schemaVersion != new SchemaVersion(1, 0) || host.workspaceStore.Find(request.workspaceId) is not { } entry ||
+                request.snapshotId is null || !System.Text.RegularExpressions.Regex.IsMatch(request.snapshotId, "^sha256:[0-9a-f]{64}$") ||
+                request.targetHash is null || !System.Text.RegularExpressions.Regex.IsMatch(request.targetHash, "^sha256:[0-9a-f]{64}$"))
+                return Results.BadRequest(new { code = "INVALID_RUNTIME_REQUEST" });
+            await host.previewLock.WaitAsync();
+            try
+            {
+                var receipt = await host.runtimeOperation.CreateAsync(entry, request.snapshotId, request.targetHash);
+                return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), receipt.runtimeId, receipt.workspaceId,
+                    receipt.snapshotId, receipt.targetHash, receipt.outputHash, receipt.status });
+            }
+            catch (ArgumentException) { return Results.BadRequest(new { code = "INVALID_RUNTIME_REQUEST" }); }
+            catch (Exception e) when (e is IOException or InvalidOperationException)
+            {
+                var failure = PreviewOperation.ToolFailure("runtime", "", e.Message.Replace(entry.root, "[workspace]"));
+                return Results.Conflict(new { code = PreviewOperation.ErrorCode(e.Message), stage = "FRB2 runtime", details = failure.Details });
+            }
+            finally { host.previewLock.Release(); }
+        });
+        app.MapGet("/v1/component-catalog", (string workspaceId) =>
+        {
+            if (host.workspaceStore.Find(workspaceId) is not { } entry || entry.kind != "sample") return Results.NotFound();
+            try
+            {
+                var targetHash = PreviewOperation.TargetHash(entry);
+                var controls = PreviewOperation.ListRegisteredReferences(entry).OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => new { controlId = pair.Key, hash = pair.Value.Hash, width = pair.Value.Width, height = pair.Value.Height }).ToArray();
+                return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), workspaceId, targetHash, controls });
+            }
+            catch (Exception e) when (e is IOException or ArgumentException or System.Xml.XmlException)
+            { return Results.Conflict(new { code = "TOOLCHAIN_MISMATCH" }); }
+        });
         app.MapPost("/v1/local/sample", (HttpContext context, LocalSample request) =>
             host.LocalAuthorized(context) ? host.Mutate(() => host.workspaceStore.Init(request.directory)) : Results.Unauthorized());
         app.MapPost("/v1/local/register", (HttpContext context, LocalRegistration request) =>
@@ -195,10 +245,13 @@ public sealed class PairingHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await app.DisposeAsync();
+        await runtimeOperation.DisposeAsync();
         File.Delete(Path.Combine(dataDirectory, "host.json"));
         ownershipLock.Dispose();
     }
     private sealed record PreviewRequest(SchemaVersion schemaVersion, string workspaceId, string snapshotId, string targetHash);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record RuntimeRequest(SchemaVersion schemaVersion, string workspaceId, string snapshotId, string targetHash);
     private sealed record BeginRequest(SchemaVersion schemaVersion, string workspaceId, JsonElement snapshot);
     private sealed record BlobRequest(SchemaVersion schemaVersion, string workspaceId, string transferId, string hash, string bytes);
     private sealed record FinalizeRequest(SchemaVersion schemaVersion, string workspaceId, string transferId);

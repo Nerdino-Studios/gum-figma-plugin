@@ -448,3 +448,110 @@ test('fallback captures exact unrotated raster bounds or blocks unknown geometry
   delete leaf.absoluteRenderBounds;
   assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' })).snapshot, null);
 });
+
+test('solid rectangles capture as native leaf frames with color and responsive bounds', async () => {
+  const rectangle = { id: 'rect', name: 'Panel', type: 'RECTANGLE', x: 4, y: 5, width: 40, height: 20, visible: true,
+    fills: [{ type: 'SOLID', color: { r: 1, g: 0.5, b: 0 } }],
+    constraints: { horizontal: 'STRETCH', vertical: 'MIN' }, minWidth: 10 };
+  const result = await captureSelection([frame('root', 'Screen', [rectangle])], 'ns', { getImageByHash: () => null }, {}, { root: 'Main' });
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.snapshot.nodes[1].type, 'FRAME');
+  assert.equal(result.snapshot.nodes[1].color, '#ff8000');
+  assert.equal(result.snapshot.nodes[1].layoutMode, 'NONE');
+  assert.equal(result.snapshot.nodes[1].clipsContent, false);
+  assert.equal(result.snapshot.nodes[1].horizontalSizing, 'FILL');
+  assert.equal(result.snapshot.nodes[1].minWidth, 10);
+  assert.equal(validateContract('snapshot', result.snapshot), true);
+  assert.deepEqual(result.assets, []);
+  rectangle.fills = [];
+  assert.ok((await captureSelection([frame('root', 'Screen', [rectangle])], 'ns', { getImageByHash: () => null })).snapshot);
+});
+
+test('decorative polygons require scoped PNG approval that expires on point-count edits', async () => {
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64'));
+  let exports = 0;
+  const polygon = { id: 'poly', name: 'Triangle', type: 'POLYGON', pointCount: 3, x: 0, y: 0, width: 1, height: 1, visible: true,
+    fills: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0 } }], absoluteBoundingBox: { x: 0, y: 0, width: 1, height: 1 },
+    absoluteRenderBounds: { x: 0, y: 0, width: 1, height: 1 }, exportAsync: async () => { exports++; return png; } };
+  const root = frame('root', 'Screen', [polygon]); root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 };
+  const api = { getImageByHash: () => null };
+  const blocked = await captureSelection([root], 'ns', api, {}, { root: 'Main' });
+  const diagnostic = blocked.diagnostics.find(item => item.nodeId === 'poly' && item.property === 'decorative-shape');
+  assert.ok(diagnostic?.fingerprint);
+  assert.equal(exports, 0);
+  const approval = [{ nodeId: 'poly', feature: diagnostic.property, fingerprint: diagnostic.fingerprint }];
+  const approved = await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval);
+  assert.deepEqual(approved.diagnostics, []);
+  assert.equal(approved.snapshot.schemaVersion.minor, 6);
+  assert.equal(approved.snapshot.nodes[1].type, 'IMAGE');
+  assert.equal(approved.snapshot.nodes[1].fallback.feature, 'decorative-shape');
+  assert.equal(validateContract('snapshot', approved.snapshot), true);
+  assert.equal(exports, 1);
+  polygon.pointCount = 4;
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+  assert.equal(exports, 1);
+  polygon.pointCount = 3;
+  root.reactions = [{ trigger: { type: 'ON_CLICK' } }];
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+  assert.equal(exports, 1);
+  delete root.reactions;
+  polygon.exportAsync = async () => { polygon.pointCount = 4; return png; };
+  const changed = await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval);
+  assert.ok(changed.diagnostics.some(item => item.code === 'SOURCE_CHANGED_DURING_CAPTURE'));
+});
+
+test('polygon with fractional visible bounds exports full node bounds without moving the layer', async () => {
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAABCAYAAAD5PA/NAAAAD0lEQVR4nGP4z8DwHxkDAEPNB/lfEPxcAAAAAElFTkSuQmCC', 'base64'));
+  const settings = [];
+  const polygon = { id: 'poly', name: 'Triangle', type: 'POLYGON', pointCount: 3, x: 10, y: 20, width: 4, height: 1, visible: true,
+    fills: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0 } }],
+    absoluteBoundingBox: { x: 10, y: 20, width: 4, height: 1 },
+    absoluteRenderBounds: { x: 10.2, y: 20.25, width: 3.6, height: 0.75 },
+    exportAsync: async value => { settings.push(value); return png; } };
+  const root = frame('root', 'Screen', [polygon]); root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 };
+  const api = { getImageByHash: () => null };
+  const diagnostic = (await captureSelection([root], 'ns', api, {}, { root: 'Main' })).diagnostics.find(d => d.nodeId === 'poly');
+  assert.ok(diagnostic.fingerprint);
+  const approval = [{ nodeId: 'poly', feature: diagnostic.property, fingerprint: diagnostic.fingerprint }];
+  const result = await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval);
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(settings[0], { format: 'PNG', constraint: { type: 'SCALE', value: 1 }, useAbsoluteBounds: true, contentsOnly: true });
+  const captured = result.snapshot.nodes[1];
+  assert.deepEqual([captured.x, captured.y, captured.width, captured.height], [10, 20, 4, 1]);
+  assert.equal(validateContract('snapshot', result.snapshot), true);
+  polygon.exportAsync = async () => Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64'));
+  assert.equal((await captureSelection([root], 'ns', api, {}, { root: 'Main' }, approval)).snapshot, null);
+});
+
+test('auto-layout polygon fallback keeps its full slot; outer shadow bounds stay blocked', async () => {
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAABCAYAAAD5PA/NAAAAD0lEQVR4nGP4z8DwHxkDAEPNB/lfEPxcAAAAAElFTkSuQmCC', 'base64'));
+  const polygon = { id: 'poly', name: 'Triangle', type: 'POLYGON', pointCount: 3, x: 0, y: 0, width: 4, height: 1, visible: true,
+    fills: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0 } }], absoluteBoundingBox: { x: 0, y: 0, width: 4, height: 1 },
+    absoluteRenderBounds: { x: 0.2, y: 0, width: 3.6, height: 0.75 }, exportAsync: async () => png };
+  const root = frame('root', 'Stack', [polygon, { ...frame('next', 'Next'), width: 4, height: 1 }]);
+  root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 }; root.layoutMode = 'VERTICAL'; root.itemSpacing = 6;
+  const api = { getImageByHash: () => null };
+  const diagnostic = (await captureSelection([root], 'ns', api, {}, { root: 'Main' })).diagnostics.find(d => d.nodeId === 'poly');
+  assert.ok(diagnostic.fingerprint);
+  const result = await captureSelection([root], 'ns', api, {}, { root: 'Main' }, [{ nodeId: 'poly', feature: diagnostic.property, fingerprint: diagnostic.fingerprint }]);
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.snapshot.nodes[1].height, 1);
+  assert.equal(result.snapshot.nodes[0].itemSpacing, 6);
+  polygon.absoluteRenderBounds.width = 5;
+  const blocked = (await captureSelection([root], 'ns', api, {}, { root: 'Main' })).diagnostics.find(d => d.nodeId === 'poly');
+  assert.equal(blocked.fingerprint, undefined);
+  assert.match(blocked.message, /outside.*auto.layout/i);
+});
+
+test('fallback diagnostics identify the exact failed guard', async () => {
+  const polygon = { id: 'poly', name: 'Triangle', type: 'POLYGON', pointCount: 3, x: 0, y: 0, width: 1, height: 1, visible: true,
+    absoluteBoundingBox: { x: 0, y: 0, width: 1, height: 1 }, absoluteRenderBounds: { x: 0, y: 0, width: 1, height: 1 } };
+  const root = frame('root', 'Screen', [polygon]); root.absoluteBoundingBox = { x: 0, y: 0, width: 120, height: 50 };
+  const reason = async () => (await captureSelection([root], 'ns', { getImageByHash: () => null })).diagnostics.find(d => d.property === 'decorative-shape').message;
+  polygon.rotation = 15;
+  assert.match(await reason(), /Triangle.*rotated/i);
+  polygon.rotation = 0; root.reactions = [{ trigger: { type: 'ON_CLICK' } }];
+  assert.match(await reason(), /Triangle.*interactive/i);
+  delete root.reactions; delete polygon.absoluteRenderBounds;
+  assert.match(await reason(), /Triangle.*render bounds.*unavailable/i);
+});

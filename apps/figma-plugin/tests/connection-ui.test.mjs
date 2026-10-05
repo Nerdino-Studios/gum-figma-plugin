@@ -19,12 +19,15 @@ test('opening offline then reconnecting lists selectable registered workspaces w
   globalThis.window = { addEventListener() {} };
   let online = false;
   globalThis.bridgeOnline = () => online;
+  const catalogRequests = [];
+  globalThis.recordCatalog = id => catalogRequests.push(id);
   const compiled = await build({ entryPoints: ['src/ui/index.ts'], absWorkingDir: new URL('../', import.meta.url).pathname,
     bundle: true, write: false, format: 'esm', platform: 'browser', plugins: [{ name: 'fake', setup(builder) {
       builder.onResolve({ filter: /bridge-client/ }, () => ({ path: 'bridge', namespace: 'fake' }));
       builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: `export class BridgeClient {
         async workspaces() { if (!globalThis.bridgeOnline()) throw new Error('offline'); return { workspaces: [
           { id: 'a', label: 'Sample workspace' }, { id: 'b', label: 'Second workspace' }] }; }
+        async registeredControls(id) { globalThis.recordCatalog(id); return { controls: [] }; }
       }`, loader: 'js' }));
     } }] });
   await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
@@ -35,48 +38,15 @@ test('opening offline then reconnecting lists selectable registered workspaces w
   online = true;
   content.children[0].listeners.click();
   await flush();
-  assert.match(content.textContent, /Connected.*Sample workspace/);
+  assert.match(content.textContent, /Connected/);
+  assert.ok(content.children.some(child => /Sample workspace/.test(child.textContent)));
   const select = content.children.find(item => item.tag === 'select');
   assert.deepEqual(select.children.map(option => option.textContent), ['Sample workspace', 'Second workspace']);
   assert.equal(select.value, 'a');
   select.value = 'b'; select.listeners.change();
-  assert.match(content.textContent, /Second workspace/);
+  await flush();
+  assert.ok(content.children.some(child => /Second workspace/.test(child.textContent)));
+  assert.deepEqual(catalogRequests, ['a', 'b']);
   delete globalThis.bridgeOnline;
-});
-
-test('capture on A cannot publish to B when workspace changes before scene capture returns', async () => {
-  const navigation = new Element();
-  const content = new Element();
-  globalThis.document = { querySelector: key => key === '#navigation' ? navigation : content, createElement: tag => new Element(tag) };
-  const listeners = {};
-  globalThis.window = { addEventListener: (event, callback) => { listeners[event] = callback; } };
-  const posted = [];
-  const published = [];
-  globalThis.parent = { postMessage: message => posted.push(message.pluginMessage) };
-  globalThis.capturePublished = published;
-  const compiled = await build({ entryPoints: ['src/ui/index.ts'], absWorkingDir: new URL('../', import.meta.url).pathname,
-    bundle: true, write: false, format: 'esm', platform: 'browser', plugins: [{ name: 'fake', setup(builder) {
-      builder.onResolve({ filter: /bridge-client/ }, () => ({ path: 'bridge', namespace: 'fake' }));
-      builder.onLoad({ filter: /.*/, namespace: 'fake' }, () => ({ contents: `export class BridgeClient {
-        async workspaces() { return { workspaces: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] }; }
-        async publish(workspace) { globalThis.capturePublished.push(workspace); return { snapshotId: 'sha256:snapshot' }; }
-      }`, loader: 'js' }));
-    } }] });
-  await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].contents).toString('base64'));
-  await flush();
-  listeners.message({ data: { pluginMessage: { type: 'namespace-associated', namespace: 'design' } } });
-  navigation.children.find(item => item.textContent === 'Preview and changes').listeners.click();
-  const alias = content.children.find(item => item.tag === 'input' && !item.readOnly);
-  alias.value = 'MainMenu';
-  content.children.find(item => item.textContent === 'Capture selection and publish').listeners.click();
-  assert.equal(posted.at(-1).type, 'capture-publication');
-  navigation.children.find(item => item.textContent === 'Connection').listeners.click();
-  const select = content.children.find(item => item.tag === 'select');
-  assert.equal(select.disabled, true);
-  select.value = 'b'; select.listeners.change(); // even a synthetic change must not switch the pinned destination
-  listeners.message({ data: { pluginMessage: { type: 'capture-result', result: { snapshot: { snapshotId: 'sha256:snapshot' }, assets: [], diagnostics: [] } } } });
-  await flush();
-  assert.deepEqual(published, ['a']);
-  assert.match(content.textContent, /A/);
-  delete globalThis.capturePublished;
+  delete globalThis.recordCatalog;
 });

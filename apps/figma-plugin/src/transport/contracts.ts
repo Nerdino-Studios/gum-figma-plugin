@@ -25,13 +25,14 @@ function validNode(value: unknown): boolean {
   const required = ['id', 'parentId', 'type', 'name', 'x', 'y', 'width', 'height', 'visible'];
   const optional = ['layoutMode', 'clipsContent', 'characters', 'fontSize', 'fontFamily', 'fontStyle', 'color', 'imageHash', 'scaleMode',
     'horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight',
-    'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign', 'rotation', 'imageTransform', 'fallback'];
+    'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign', 'rotation', 'imageTransform', 'fallback', 'componentId', 'overrides'];
   if (!required.every(key => Object.hasOwn(value, key)) || !Object.keys(value).every(key => [...required, ...optional].includes(key))) return false;
   if (!text(value.id) || !(value.parentId === null || text(value.parentId)) || !text(value.name) || typeof value.visible !== 'boolean' ||
-      !['FRAME', 'TEXT', 'IMAGE'].includes(value.type as string) ||
+      !['FRAME', 'TEXT', 'IMAGE', 'INSTANCE'].includes(value.type as string) ||
       !['x', 'y', 'width', 'height'].every(key => typeof value[key] === 'number' && Number.isFinite(value[key]) && (key === 'x' || key === 'y' || (value[key] as number) >= 0))) return false;
+  if (value.type !== 'INSTANCE' && (Object.hasOwn(value, 'componentId') || Object.hasOwn(value, 'overrides'))) return false;
   if (Object.hasOwn(value, 'fallback') && (!record(value.fallback) || !exact(value.fallback, ['feature', 'fingerprint']) ||
-      value.type !== 'IMAGE' || value.fallback.feature !== 'effects/strokes' ||
+      value.type !== 'IMAGE' || !['effects/strokes', 'decorative-shape'].includes(value.fallback.feature as string) ||
       typeof value.fallback.fingerprint !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(value.fallback.fingerprint))) return false;
   if (Object.hasOwn(value, 'color') && (typeof value.color !== 'string' || !/^#[0-9a-f]{6}$/.test(value.color))) return false;
   for (const [key, allowed] of Object.entries({ horizontalSizing: ['FIXED', 'FILL', 'HUG'], verticalSizing: ['FIXED', 'FILL', 'HUG'],
@@ -48,6 +49,10 @@ function validNode(value: unknown): boolean {
   for (const [key, allowed] of Object.entries({ counterAxisAlignItems: ['MIN', 'CENTER', 'MAX'], layoutAlign: ['INHERIT', 'MIN', 'CENTER', 'MAX'] }))
     if (Object.hasOwn(value, key) && !allowed.includes(value[key] as string)) return false;
   switch (value.type) {
+    case 'INSTANCE': return text(value.componentId) && !Object.hasOwn(value, 'overrides') &&
+      !['layoutMode', 'clipsContent', 'characters', 'fontSize', 'fontFamily', 'fontStyle', 'color', 'imageHash', 'scaleMode', 'imageTransform', 'fallback', 'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems',
+        'horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight',
+        'layoutAlign', 'rotation'].some(key => Object.hasOwn(value, key));
     case 'FRAME': return !['characters', 'fontSize', 'fontFamily', 'fontStyle', 'imageHash', 'scaleMode', 'imageTransform'].some(key => Object.hasOwn(value, key)) &&
       ['NONE', 'HORIZONTAL', 'VERTICAL'].includes(value.layoutMode as string) && typeof value.clipsContent === 'boolean';
     case 'TEXT': return !['layoutMode', 'clipsContent', 'imageHash', 'scaleMode', 'imageTransform', 'itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems'].some(key => Object.hasOwn(value, key)) &&
@@ -73,6 +78,19 @@ function rootMappingsValid(value: unknown, roots: unknown, aliases: unknown): bo
     new Set(value.map(entry => entry.rootId)).size === value.length;
 }
 
+function componentsValid(value: unknown): boolean {
+  return Array.isArray(value) && value.every(component => record(component) &&
+    Object.keys(component).every(key => ['id', 'alias', 'mode', 'nodes', 'controlId', 'width', 'height'].includes(key)) &&
+    text(component.id) && text(component.alias) &&
+    (component.mode === 'generate' && Array.isArray(component.nodes) && component.nodes.every(validNode) &&
+      !Object.hasOwn(component, 'controlId') && !Object.hasOwn(component, 'width') && !Object.hasOwn(component, 'height') ||
+     component.mode === 'reference' && text(component.controlId) &&
+       typeof component.width === 'number' && Number.isFinite(component.width) && component.width > 0 &&
+       typeof component.height === 'number' && Number.isFinite(component.height) && component.height > 0 &&
+       !Object.hasOwn(component, 'nodes'))) &&
+    new Set(value.map(component => component.id)).size === value.length;
+}
+
 function textArray(value: unknown): boolean {
   return Array.isArray(value) && value.every(text);
 }
@@ -80,7 +98,7 @@ function textArray(value: unknown): boolean {
 export function validateContract(kind: string, value: unknown): boolean {
   if (!Object.hasOwn(fields, kind) || !record(value)) return false;
   const required = fields[kind as ContractKind];
-  const allowed = ['schemaVersion', ...required, 'extensions', ...(kind === 'snapshot' ? ['extractionDiagnostics', 'rootMappings'] : [])];
+  const allowed = ['schemaVersion', ...required, 'extensions', ...(kind === 'snapshot' ? ['extractionDiagnostics', 'rootMappings', 'components'] : [])];
   if (!required.every(key => Object.hasOwn(value, key)) || !Object.keys(value).every(key => allowed.includes(key))) return false;
 
   const version = value.schemaVersion;
@@ -100,6 +118,11 @@ export function validateContract(kind: string, value: unknown): boolean {
       text(value.snapshotId) && text(value.documentNamespace) &&
       textArray(value.selectedRootIds) && aliasesValid(value.rootAliases) &&
       (!Object.hasOwn(value, 'rootMappings') || (version.minor as number) >= 4 && rootMappingsValid(value.rootMappings, value.selectedRootIds, value.rootAliases)) &&
+      (!Object.hasOwn(value, 'components') || (version.minor as number) >= 5 && componentsValid(value.components)) &&
+      ((version.minor as number) >= 6 || ![...(Array.isArray(value.nodes) ? value.nodes : []),
+        ...(Array.isArray(value.components) ? value.components.flatMap(component => record(component) && Array.isArray(component.nodes) ? component.nodes : []) : [])]
+        .some(node => record(node) && record(node.fallback) && node.fallback.feature === 'decorative-shape')) &&
+      ((version.minor as number) >= 5 || Array.isArray(value.nodes) && !value.nodes.some(node => record(node) && node.type === 'INSTANCE')) &&
       (value.rootAliases as { rootId: string }[]).every(entry => (value.selectedRootIds as string[]).includes(entry.rootId)) &&
       Array.isArray(value.nodes) && value.nodes.every(validNode) && ((version.minor as number) >= 1 ||
         value.nodes.every(node => record(node) && !['horizontalSizing', 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => Object.hasOwn(node, key)))) &&

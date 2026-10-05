@@ -240,6 +240,8 @@ public sealed class PublicationStore
         return document.RootElement.TryGetProperty("extractionDiagnostics", out _) ? "blocked" : "published";
     }
     private static IEnumerable<string> References(JsonElement snapshot) => snapshot.GetProperty("nodes").EnumerateArray()
+        .Concat(snapshot.TryGetProperty("components", out var components) ? components.EnumerateArray()
+            .Where(c => c.GetProperty("mode").GetString() == "generate").SelectMany(c => c.GetProperty("nodes").EnumerateArray()) : [])
         .Where(n => n.TryGetProperty("imageHash", out _)).Select(n => n.GetProperty("imageHash").GetString()!).Distinct(StringComparer.Ordinal);
     private static bool ValidSnapshot(JsonElement snapshot)
     {
@@ -251,21 +253,37 @@ public sealed class PublicationStore
         var value = "{" + string.Join(',', semantic.OrderBy(p => p.Name, StringComparer.Ordinal).Select(p => Quote(p.Name) + ":" + Canonical(p.Value))) + "}";
         if (id != "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)))) return false;
         var nodes = snapshot.GetProperty("nodes").EnumerateArray().ToArray();
+        var components = snapshot.TryGetProperty("components", out var definitions) ? definitions.EnumerateArray().ToArray() : [];
+        var generated = components.Where(c => c.GetProperty("mode").GetString() == "generate").ToArray();
+        var allNodes = nodes.Concat(generated.SelectMany(c => c.GetProperty("nodes").EnumerateArray())).ToArray();
         var roots = snapshot.GetProperty("selectedRootIds").EnumerateArray().Select(v => v.GetString()!).ToArray();
-        if (roots.Length == 0 || nodes.Length == 0 || nodes.Length > 256 || roots.Distinct().Count() != roots.Length ||
-            nodes.Any(n => n.EnumerateObject().Select(p => p.Name).Distinct().Count() != n.EnumerateObject().Count()) ||
-            nodes.Select(n => n.GetProperty("id").GetString()).Distinct().Count() != nodes.Length ||
+        if (roots.Length == 0 || nodes.Length == 0 || allNodes.Length > 256 || roots.Distinct().Count() != roots.Length ||
+            allNodes.Any(n => n.EnumerateObject().Select(p => p.Name).Distinct().Count() != n.EnumerateObject().Count()) ||
+            allNodes.Select(n => n.GetProperty("id").GetString()).Distinct().Count() != allNodes.Length ||
+            components.Select(c => c.GetProperty("alias").GetString()).Concat(snapshot.GetProperty("rootAliases").EnumerateArray().Select(a => a.GetProperty("alias").GetString())).Distinct(StringComparer.OrdinalIgnoreCase).Count() != components.Length + roots.Length ||
+            components.Any(c => !System.Text.RegularExpressions.Regex.IsMatch(c.GetProperty("alias").GetString()!, "^[A-Za-z][A-Za-z0-9_]*$") ||
+                c.GetProperty("mode").GetString() == "reference" && c.GetProperty("controlId").GetString() != c.GetProperty("alias").GetString()) ||
+            allNodes.Any(n => n.GetProperty("type").GetString() == "INSTANCE" && !components.Any(c => c.GetProperty("id").GetString() == n.GetProperty("componentId").GetString())) ||
             snapshot.GetProperty("rootAliases").GetArrayLength() != roots.Length ||
             snapshot.GetProperty("rootAliases").EnumerateArray().Select(a => a.GetProperty("alias").GetString()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != roots.Length ||
             snapshot.GetProperty("rootAliases").EnumerateArray().Any(a => !System.Text.RegularExpressions.Regex.IsMatch(a.GetProperty("alias").GetString()!, "^[A-Za-z_][A-Za-z0-9_]*$"))) return false;
         var seen = new HashSet<string>();
-        foreach (var node in nodes)
+        foreach (var graph in new[] { nodes }.Concat(generated.Select(c => c.GetProperty("nodes").EnumerateArray().ToArray())))
         {
-            var source = node.GetProperty("id").GetString()!;
-            var parent = node.GetProperty("parentId");
-            if (parent.ValueKind == JsonValueKind.Null ? !roots.Contains(source) || node.GetProperty("type").GetString() != "FRAME" :
-                !seen.Contains(parent.GetString()!) || roots.Contains(source)) return false;
-            seen.Add(source);
+            if (graph.Length == 0) return false;
+            var expectedRoots = ReferenceEquals(graph, nodes) ? roots : new[] { graph[0].GetProperty("id").GetString()! };
+            if (!ReferenceEquals(graph, nodes) && !generated.Any(c => c.GetProperty("id").GetString() == expectedRoots[0])) return false;
+            var local = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var node in graph)
+            {
+                var source = node.GetProperty("id").GetString()!;
+                var parent = node.GetProperty("parentId");
+                if (parent.ValueKind == JsonValueKind.Null ? !expectedRoots.Contains(source) || node.GetProperty("type").GetString() != "FRAME" :
+                    !local.Contains(parent.GetString()!) || expectedRoots.Contains(source)) return false;
+                local.Add(source);
+                seen.Add(source);
+            }
+            if (!expectedRoots.All(local.Contains)) return false;
         }
         return roots.All(seen.Contains) && References(snapshot).All(Hash);
     }

@@ -35,7 +35,8 @@
           "enum": [
             "FRAME",
             "TEXT",
-            "IMAGE"
+            "IMAGE",
+            "INSTANCE"
           ]
         },
         "name": {
@@ -92,7 +93,9 @@
           "exclusiveMinimum": 0
         },
         "fallback": { "type": "object", "additionalProperties": false, "required": ["feature", "fingerprint"],
-          "properties": { "feature": { "const": "effects/strokes" }, "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } } },
+          "properties": { "feature": { "enum": ["effects/strokes", "decorative-shape"] }, "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } } },
+        "componentId": { "$ref": "#/$defs/text" },
+        "overrides": { "type": "object" },
         "imageHash": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
@@ -116,6 +119,24 @@
         }
       },
       "allOf": [
+        { "if": { "properties": { "type": { "not": { "const": "INSTANCE" } } }, "required": ["type"] },
+          "then": { "not": { "anyOf": [{ "required": ["componentId"] }, { "required": ["overrides"] }] } } },
+        {
+          "if": { "properties": { "type": { "const": "INSTANCE" } }, "required": ["type"] },
+          "then": { "required": ["componentId"], "not": { "anyOf": [
+            { "required": ["overrides"] }, { "required": ["layoutMode"] }, { "required": ["clipsContent"] },
+            { "required": ["characters"] }, { "required": ["fontSize"] }, { "required": ["fontFamily"] },
+            { "required": ["fontStyle"] }, { "required": ["imageHash"] }, { "required": ["scaleMode"] },
+            { "required": ["color"] }, { "required": ["fallback"] }, { "required": ["imageTransform"] },
+            { "required": ["itemSpacing"] }, { "required": ["paddingLeft"] }, { "required": ["paddingRight"] },
+            { "required": ["paddingTop"] }, { "required": ["paddingBottom"] }, { "required": ["counterAxisAlignItems"] },
+            { "required": ["horizontalSizing"] }, { "required": ["verticalSizing"] },
+            { "required": ["horizontalAnchor"] }, { "required": ["verticalAnchor"] },
+            { "required": ["minWidth"] }, { "required": ["maxWidth"] },
+            { "required": ["minHeight"] }, { "required": ["maxHeight"] },
+            { "required": ["layoutAlign"] }, { "required": ["rotation"] }
+          ] } }
+        },
         {
           "if": {
             "properties": {
@@ -326,6 +347,12 @@
     "snapshot": {
       "type": "object",
       "allOf": [{
+        "if": { "properties": { "schemaVersion": { "properties": { "minor": { "maximum": 5 } } } } },
+        "then": { "properties": {
+          "nodes": { "items": { "properties": { "fallback": { "properties": { "feature": { "const": "effects/strokes" } } } } } },
+          "components": { "items": { "properties": { "nodes": { "items": { "properties": { "fallback": { "properties": { "feature": { "const": "effects/strokes" } } } } } } } } }
+        } }
+      }, {
         "if": { "properties": { "schemaVersion": { "properties": { "minor": { "const": 0 } } } } },
         "then": { "properties": { "nodes": { "items": { "not": { "anyOf": [
           { "required": ["horizontalSizing"] }, { "required": ["verticalSizing"] },
@@ -342,6 +369,9 @@
           { "properties": { "horizontalSizing": { "const": "HUG" } }, "required": ["horizontalSizing"] },
           { "properties": { "verticalSizing": { "const": "HUG" } }, "required": ["verticalSizing"] }
         ] } } } } }
+      }, {
+        "if": { "properties": { "schemaVersion": { "properties": { "minor": { "maximum": 4 } } } } },
+        "then": { "not": { "required": ["components"] }, "properties": { "nodes": { "items": { "not": { "properties": { "type": { "const": "INSTANCE" } }, "required": ["type"] } } } } }
       }, {
         "if": { "properties": { "schemaVersion": { "properties": { "minor": { "maximum": 2 } } } } },
         "then": { "properties": { "nodes": { "items": { "not": { "anyOf": [
@@ -386,6 +416,24 @@
         },
         "extensions": {
           "$ref": "#/$defs/extensions"
+        },
+        "components": {
+          "type": "array", "items": {
+            "type": "object", "required": ["id", "alias", "mode"], "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/text" }, "alias": { "$ref": "#/$defs/text" },
+              "mode": { "enum": ["generate", "reference"] },
+              "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+              "controlId": { "$ref": "#/$defs/text" },
+              "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "allOf": [
+              { "if": { "properties": { "mode": { "const": "generate" } }, "required": ["mode"] },
+                "then": { "required": ["nodes"], "not": { "anyOf": [{ "required": ["controlId"] }, { "required": ["width"] }, { "required": ["height"] }] } } },
+              { "if": { "properties": { "mode": { "const": "reference" } }, "required": ["mode"] },
+                "then": { "required": ["controlId", "width", "height"], "not": { "required": ["nodes"] } } }
+            ]
+          }
         },
         "rootMappings": {
           "type": "array",

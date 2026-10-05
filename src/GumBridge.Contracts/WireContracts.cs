@@ -25,7 +25,7 @@ public static class WireContracts
         };
         if (required is null || value.ValueKind != JsonValueKind.Object ||
             !required.All(key => value.TryGetProperty(key, out _)) ||
-            value.EnumerateObject().Any(p => p.Name != "schemaVersion" && p.Name != "extensions" && !(kind == "snapshot" && (p.Name == "extractionDiagnostics" || p.Name == "rootMappings")) && !required.Contains(p.Name)) ||
+            value.EnumerateObject().Any(p => p.Name != "schemaVersion" && p.Name != "extensions" && !(kind == "snapshot" && (p.Name == "extractionDiagnostics" || p.Name == "rootMappings" || p.Name == "components")) && !required.Contains(p.Name)) ||
             !value.TryGetProperty("schemaVersion", out var version) || !ValidVersion(version)) return false;
 
         if (value.TryGetProperty("extensions", out var extensions) &&
@@ -41,6 +41,9 @@ public static class WireContracts
                 Text(value.GetProperty("snapshotId")) && Text(value.GetProperty("documentNamespace")) &&
                 TextArray(value.GetProperty("selectedRootIds")) && ValidAliases(value.GetProperty("rootAliases"), value.GetProperty("selectedRootIds")) && NodeArray(value.GetProperty("nodes")) &&
                 (!value.TryGetProperty("rootMappings", out var mappings) || version.GetProperty("minor").GetInt32() >= 4 && ValidRootMappings(mappings, value.GetProperty("selectedRootIds"), value.GetProperty("rootAliases"))) &&
+                (!value.TryGetProperty("components", out var components) || version.GetProperty("minor").GetInt32() >= 5 && ValidComponents(components)) &&
+                (version.GetProperty("minor").GetInt32() >= 6 || !HasShapeFallback(value)) &&
+                (version.GetProperty("minor").GetInt32() >= 5 || !value.GetProperty("nodes").EnumerateArray().Any(n => n.GetProperty("type").GetString() == "INSTANCE")) &&
                 (version.GetProperty("minor").GetInt32() >= 1 || !value.GetProperty("nodes").EnumerateArray().Any(HasResponsiveFields)) &&
                 (version.GetProperty("minor").GetInt32() >= 2 || !value.GetProperty("nodes").EnumerateArray().Any(HasLayoutFields)) &&
                 (version.GetProperty("minor").GetInt32() >= 3 || !value.GetProperty("nodes").EnumerateArray().Any(n => n.TryGetProperty("rotation", out _) || n.TryGetProperty("imageTransform", out _) || n.TryGetProperty("fallback", out _))),
@@ -51,6 +54,15 @@ public static class WireContracts
                 new[] { "info", "warning", "error" }.Contains(value.GetProperty("severity").GetString()),
             _ => false
         };
+    }
+
+    private static bool HasShapeFallback(JsonElement snapshot)
+    {
+        var nodes = snapshot.GetProperty("nodes").EnumerateArray().AsEnumerable();
+        if (snapshot.TryGetProperty("components", out var components))
+            nodes = nodes.Concat(components.EnumerateArray().Where(c => c.GetProperty("mode").GetString() == "generate")
+                .SelectMany(c => c.GetProperty("nodes").EnumerateArray()));
+        return nodes.Any(n => n.TryGetProperty("fallback", out var fallback) && fallback.GetProperty("feature").GetString() == "decorative-shape");
     }
 
     private static bool ValidVersion(JsonElement version) =>
@@ -81,6 +93,20 @@ public static class WireContracts
             m.TryGetProperty("controlId", out var controlId) && controlId.ValueKind == JsonValueKind.String && controlId.GetString() == "native.frame") &&
         mappings.EnumerateArray().Select(m => m.GetProperty("rootId").GetString()).Distinct().Count() == mappings.GetArrayLength();
 
+    private static bool ValidComponents(JsonElement components) => components.ValueKind == JsonValueKind.Array &&
+        components.EnumerateArray().All(c => c.ValueKind == JsonValueKind.Object &&
+            c.EnumerateObject().All(p => new[] { "id", "alias", "mode", "nodes", "controlId", "width", "height" }.Contains(p.Name)) &&
+            c.TryGetProperty("id", out var id) && Text(id) && c.TryGetProperty("alias", out var alias) && Text(alias) &&
+            c.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String &&
+            (mode.GetString() == "generate" && c.TryGetProperty("nodes", out var nodes) && NodeArray(nodes) &&
+                !c.TryGetProperty("controlId", out _) && !c.TryGetProperty("width", out _) && !c.TryGetProperty("height", out _) ||
+             mode.GetString() == "reference" && c.TryGetProperty("controlId", out var control) && Text(control) &&
+                c.TryGetProperty("width", out var width) && FinitePositive(width) &&
+                c.TryGetProperty("height", out var height) && FinitePositive(height) && !c.TryGetProperty("nodes", out _))) &&
+        components.EnumerateArray().Select(c => c.GetProperty("id").GetString()).Distinct(StringComparer.Ordinal).Count() == components.GetArrayLength();
+
+    private static bool FinitePositive(JsonElement value) => value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var n) && double.IsFinite(n) && n > 0;
+
     private static bool HasResponsiveFields(JsonElement node) => new[] { "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight" }.Any(key => node.TryGetProperty(key, out _));
 
     private static bool HasLayoutFields(JsonElement node) => new[] { "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems", "layoutAlign" }.Any(key => node.TryGetProperty(key, out _)) ||
@@ -90,7 +116,7 @@ public static class WireContracts
     {
         if (node.ValueKind != JsonValueKind.Object) return false;
         string[] required = ["id", "parentId", "type", "name", "x", "y", "width", "height", "visible"];
-        string[] optional = ["layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "imageHash", "scaleMode", "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems", "layoutAlign", "rotation", "imageTransform", "fallback"];
+        string[] optional = ["layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "imageHash", "scaleMode", "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems", "layoutAlign", "rotation", "imageTransform", "fallback", "componentId", "overrides"];
         if (!required.All(key => node.TryGetProperty(key, out _)) ||
             node.EnumerateObject().Any(p => !required.Contains(p.Name) && !optional.Contains(p.Name)) ||
             !Text(node.GetProperty("id")) || !Text(node.GetProperty("name")) ||
@@ -106,9 +132,10 @@ public static class WireContracts
             (transform.ValueKind != JsonValueKind.Array || transform.GetArrayLength() != 2 || transform.EnumerateArray().Any(row =>
                 row.ValueKind != JsonValueKind.Array || row.GetArrayLength() != 3 || row.EnumerateArray().Any(value =>
                     value.ValueKind != JsonValueKind.Number || !value.TryGetDouble(out var n) || !double.IsFinite(n))))) return false;
+        if (node.GetProperty("type").GetString() != "INSTANCE" && (node.TryGetProperty("componentId", out _) || node.TryGetProperty("overrides", out _))) return false;
         if (node.TryGetProperty("fallback", out var fallback) &&
             (node.GetProperty("type").GetString() != "IMAGE" || fallback.ValueKind != JsonValueKind.Object || fallback.EnumerateObject().Count() != 2 ||
-             !fallback.TryGetProperty("feature", out var feature) || feature.ValueKind != JsonValueKind.String || feature.GetString() != "effects/strokes" ||
+             !fallback.TryGetProperty("feature", out var feature) || feature.ValueKind != JsonValueKind.String || !new[] { "effects/strokes", "decorative-shape" }.Contains(feature.GetString()) ||
              !fallback.TryGetProperty("fingerprint", out var fingerprint) || fingerprint.ValueKind != JsonValueKind.String ||
              !Regex.IsMatch(fingerprint.GetString()!, @"^sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant))) return false;
         if (node.TryGetProperty("rotation", out var rotation) && (rotation.ValueKind != JsonValueKind.Number || !rotation.TryGetDouble(out var angle) || !double.IsFinite(angle))) return false;
@@ -133,7 +160,10 @@ public static class WireContracts
             "TEXT" => Absent("layoutMode", "clipsContent", "imageHash", "scaleMode", "imageTransform", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems") && Has("characters") &&
                 node.GetProperty("characters").ValueKind == JsonValueKind.String && TextProperty("fontFamily") && TextProperty("fontStyle") && Has("fontSize") &&
                 node.GetProperty("fontSize").ValueKind == JsonValueKind.Number && node.GetProperty("fontSize").TryGetDouble(out var size) && double.IsFinite(size) && size > 0,
-            "IMAGE" => Absent("layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems") &&
+            "INSTANCE" => Absent("layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "imageHash", "scaleMode", "imageTransform", "fallback", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems",
+                    "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth", "minHeight", "maxHeight", "layoutAlign", "rotation") &&
+                TextProperty("componentId") && !Has("overrides"),
+            "IMAGE" => Absent("layoutMode", "clipsContent", "characters", "fontSize", "fontFamily", "fontStyle", "color", "componentId", "overrides", "itemSpacing", "paddingLeft", "paddingRight", "paddingTop", "paddingBottom", "counterAxisAlignItems") &&
                 (Has("imageTransform") == (Has("scaleMode") && node.GetProperty("scaleMode").GetString() == "CROP")) && TextProperty("imageHash") &&
                 Regex.IsMatch(node.GetProperty("imageHash").GetString()!, @"^sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant) &&
                 TextProperty("scaleMode") && new[] { "FIT", "FILL", "CROP" }.Contains(node.GetProperty("scaleMode").GetString()),

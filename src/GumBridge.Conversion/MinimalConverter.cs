@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using GumBridge.Contracts;
 
 namespace GumBridge.Conversion;
@@ -11,7 +12,11 @@ public sealed record ConversionDiagnostic(string Code, string NodeId, string Mes
 public sealed record GumElement(string Name, string Type, string? Parent, bool Visible, IReadOnlyList<GumValue> Values);
 public sealed record GumValue(string Name, string Type, string Value);
 public sealed record GumScreen(string Name, IReadOnlyList<GumElement> Elements);
-public sealed record ConversionResult(IReadOnlyList<GumScreen> Screens, IReadOnlyList<ConversionDiagnostic> Diagnostics);
+public sealed record GumComponent(string Name, IReadOnlyList<GumElement> Elements);
+public sealed record ConversionResult(IReadOnlyList<GumScreen> Screens, IReadOnlyList<ConversionDiagnostic> Diagnostics)
+{
+    public IReadOnlyList<GumComponent> Components { get; init; } = [];
+}
 public sealed record FontKey(string Family, string Style, int Size);
 public sealed record FontAsset(string Path, string Hash);
 
@@ -19,14 +24,17 @@ public sealed record FontAsset(string Path, string Hash);
 public static class MinimalConverter
 {
     public static ConversionResult Convert(JsonElement snapshot, IReadOnlyDictionary<string, (double Width, double Height)>? imageDimensions = null,
-        IReadOnlyDictionary<FontKey, FontAsset>? fonts = null)
+        IReadOnlyDictionary<FontKey, FontAsset>? fonts = null, IReadOnlyDictionary<string, string>? referenceHashes = null,
+        IReadOnlyDictionary<string, (double Width, double Height)>? referenceDimensions = null)
     {
         var errors = new List<ConversionDiagnostic>();
         if (!WireContracts.Validate("snapshot", snapshot))
             return new([], [new("INVALID_SNAPSHOT", "snapshot", "Expected valid v1 snapshot; correct malformed or unknown semantic fields")]);
-        if (snapshot.TryGetProperty("extractionDiagnostics", out var existing))
-            foreach (var diagnostic in existing.EnumerateArray())
-                errors.Add(new("UNSUPPORTED_FEATURE", "snapshot", diagnostic.GetProperty("message").GetString()!));
+        if (snapshot.TryGetProperty("extractionDiagnostics", out var blocked))
+            return new([], blocked.EnumerateArray().Select(d => new ConversionDiagnostic("UNSUPPORTED_FEATURE", "snapshot", d.GetProperty("message").GetString()!)).ToArray());
+        if (snapshot.TryGetProperty("components", out _) || snapshot.GetProperty("selectedRootIds").GetArrayLength() > 1 ||
+            snapshot.GetProperty("nodes").EnumerateArray().Any(n => n.GetProperty("type").GetString() == "INSTANCE"))
+            return ConvertGraph(snapshot, imageDimensions, fonts, referenceHashes, referenceDimensions);
         var nodes = snapshot.GetProperty("nodes").EnumerateArray().ToArray();
         var byId = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var node in nodes)
@@ -248,6 +256,147 @@ public static class MinimalConverter
         }
         if (errors.Count > 0) return new([], errors);
         return new([new(aliases[roots[0]], elements)], []);
+    }
+
+    // Lower each reachable generated definition once, then each selected screen. Referenced
+    // definitions require a caller-supplied matching target hash; they are never serialized.
+    private static ConversionResult ConvertGraph(JsonElement snapshot, IReadOnlyDictionary<string, (double Width, double Height)>? images,
+        IReadOnlyDictionary<FontKey, FontAsset>? fonts, IReadOnlyDictionary<string, string>? referenceHashes,
+        IReadOnlyDictionary<string, (double Width, double Height)>? referenceDimensions)
+    {
+        var errors = new List<ConversionDiagnostic>();
+        var components = snapshot.TryGetProperty("components", out var list) ? list.EnumerateArray().ToArray() : [];
+        var definitions = components.ToDictionary(c => c.GetProperty("id").GetString()!, StringComparer.Ordinal);
+        var roots = snapshot.GetProperty("selectedRootIds").EnumerateArray().Select(r => r.GetString()!).ToArray();
+        var nodes = snapshot.GetProperty("nodes").EnumerateArray().ToArray();
+        var aliases = snapshot.GetProperty("rootAliases").EnumerateArray().ToDictionary(a => a.GetProperty("rootId").GetString()!, a => a.GetProperty("alias").GetString()!, StringComparer.Ordinal);
+        var all = nodes.Concat(components.Where(c => c.GetProperty("mode").GetString() == "generate")
+            .SelectMany(c => c.GetProperty("nodes").EnumerateArray())).ToArray();
+        if (all.Select(n => n.GetProperty("id").GetString()).Distinct(StringComparer.Ordinal).Count() != all.Length ||
+            roots.Distinct(StringComparer.Ordinal).Count() != roots.Length ||
+            aliases.Count != roots.Length)
+            errors.Add(new("INVALID_SNAPSHOT", "snapshot", "Duplicate source identity or missing root alias"));
+        var names = aliases.Values.Concat(components.Select(c => c.GetProperty("alias").GetString()!)).ToArray();
+        if (names.Any(n => !System.Text.RegularExpressions.Regex.IsMatch(n, @"^[A-Za-z][A-Za-z0-9_]*$")) ||
+            names.Distinct(StringComparer.OrdinalIgnoreCase).Count() != names.Length)
+            errors.Add(new("INVALID_CONTROL_CONTRACT", "snapshot", "Component and screen aliases must be safe and case-insensitively unique"));
+        foreach (var node in all.Where(n => n.GetProperty("type").GetString() == "INSTANCE"))
+        {
+            var id = node.GetProperty("id").GetString()!;
+            var dependency = node.GetProperty("componentId").GetString()!;
+            if (new[] { "horizontalSizing", "verticalSizing", "horizontalAnchor", "verticalAnchor", "minWidth", "maxWidth",
+                "minHeight", "maxHeight", "layoutAlign", "rotation" }.Any(key => node.TryGetProperty(key, out _)))
+                errors.Add(new("INVALID_CONTROL_CONTRACT", id, "Instances cannot resize, reanchor, rotate or apply responsive limits to component controls"));
+            if (!definitions.ContainsKey(dependency)) errors.Add(new("UNRESOLVED_COMPONENT", id, "Missing captured component definition or registered reference"));
+            else if (definitions[dependency].GetProperty("mode").GetString() == "reference")
+            {
+                var expected = definitions[dependency];
+                if (node.GetProperty("width").GetDouble() != expected.GetProperty("width").GetDouble() ||
+                    node.GetProperty("height").GetDouble() != expected.GetProperty("height").GetDouble())
+                    errors.Add(new("INVALID_CONTROL_CONTRACT", id, "Referenced instance resizing requires a verified target contract"));
+            }
+            else if (definitions[dependency].GetProperty("mode").GetString() == "generate" &&
+                definitions[dependency].GetProperty("nodes").GetArrayLength() > 0)
+            {
+                var baseNode = definitions[dependency].GetProperty("nodes")[0];
+                if (node.GetProperty("width").GetDouble() != baseNode.GetProperty("width").GetDouble() ||
+                    node.GetProperty("height").GetDouble() != baseNode.GetProperty("height").GetDouble())
+                    errors.Add(new("INVALID_CONTROL_CONTRACT", id, "Resizing a component instance needs a verified responsive component-root rule"));
+            }
+            if (all.Any(child => child.GetProperty("parentId").ValueKind == JsonValueKind.String && child.GetProperty("parentId").GetString() == id))
+                errors.Add(new("INVALID_CONTROL_CONTRACT", id, "Instance children and nested overrides are not supported"));
+        }
+        foreach (var reference in components.Where(c => c.GetProperty("mode").GetString() == "reference"))
+        {
+            var controlId = reference.GetProperty("controlId").GetString()!;
+            if (referenceHashes is null || !referenceHashes.TryGetValue(controlId, out var trusted) ||
+                !System.Text.RegularExpressions.Regex.IsMatch(trusted, @"^sha256:[0-9a-f]{64}$") ||
+                referenceDimensions is null || !referenceDimensions.TryGetValue(controlId, out var size) ||
+                !double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width <= 0 || size.Height <= 0)
+                errors.Add(new("UNRESOLVED_COMPONENT", reference.GetProperty("id").GetString()!, "Reference requires a registered hash and fixed native dimensions"));
+            else if (size.Width != reference.GetProperty("width").GetDouble() || size.Height != reference.GetProperty("height").GetDouble())
+            {
+                var instance = all.FirstOrDefault(n => n.TryGetProperty("componentId", out var c) && c.ValueKind == JsonValueKind.String &&
+                    c.GetString() == reference.GetProperty("id").GetString());
+                errors.Add(new("INVALID_CONTROL_CONTRACT", instance.ValueKind == JsonValueKind.Object ? instance.GetProperty("id").GetString()! : reference.GetProperty("id").GetString()!,
+                    "Referenced placeholder size differs from registered native control"));
+            }
+        }
+        if (errors.Count > 0) return new([], errors);
+        var converted = new List<GumComponent>();
+        var screens = new List<GumScreen>();
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+        var done = new HashSet<string>(StringComparer.Ordinal);
+        void Resolve(string id)
+        {
+            if (done.Contains(id) || errors.Count > 0) return;
+            if (definitions[id].GetProperty("mode").GetString() == "reference") { done.Add(id); return; }
+            if (!visiting.Add(id)) { errors.Add(new("UNRESOLVED_COMPONENT", id, "Component dependency cycle")); return; }
+            var definition = definitions[id];
+            var source = definition.GetProperty("nodes").EnumerateArray().ToArray();
+            foreach (var dependency in source.Where(n => n.GetProperty("type").GetString() == "INSTANCE"))
+                Resolve(dependency.GetProperty("componentId").GetString()!);
+            if (errors.Count == 0)
+            {
+                var lowered = Lower(source, id, definition.GetProperty("alias").GetString()!);
+                errors.AddRange(lowered.Diagnostics);
+                if (lowered.Screens.Count == 1) converted.Add(new(lowered.Screens[0].Name, lowered.Screens[0].Elements));
+            }
+            visiting.Remove(id);
+            done.Add(id);
+        }
+        foreach (var id in definitions.Keys.OrderBy(x => x, StringComparer.Ordinal)) Resolve(id);
+        foreach (var id in roots)
+        {
+            var subtree = nodes.Where(n => n.GetProperty("id").GetString() == id || IsDescendant(n, id, nodes)).ToArray();
+            if (subtree.Length == 0 || subtree[0].GetProperty("id").GetString() != id)
+            { errors.Add(new("INVALID_SNAPSHOT", id, "Selected screen root must precede its descendants")); continue; }
+            var lowered = Lower(subtree, id, aliases[id]);
+            errors.AddRange(lowered.Diagnostics);
+            screens.AddRange(lowered.Screens);
+        }
+        return errors.Count > 0 ? new([], errors) : new(screens, []) { Components = converted };
+
+        ConversionResult Lower(JsonElement[] source, string id, string alias)
+        {
+            var replacements = source.Select(n =>
+            {
+                var copy = JsonNode.Parse(n.GetRawText())!.AsObject();
+                if (n.GetProperty("type").GetString() == "INSTANCE")
+                {
+                    copy["type"] = "FRAME";
+                    copy["layoutMode"] = "NONE";
+                    copy["clipsContent"] = false;
+                    copy.Remove("componentId");
+                }
+                return copy;
+            }).ToArray();
+            var plain = JsonSerializer.SerializeToElement(new { schemaVersion = snapshot.GetProperty("schemaVersion"), snapshotId = "lowered", documentNamespace = "lowered",
+                selectedRootIds = new[] { id }, rootAliases = new[] { new { rootId = id, alias } }, nodes = replacements });
+            var result = Convert(plain, images, fonts);
+            if (result.Diagnostics.Count > 0) return result;
+            var screen = result.Screens.Single();
+            var elements = screen.Elements.Select(e =>
+            {
+                if (!e.Name.StartsWith('N') || !int.TryParse(e.Name.AsSpan(1), out var index) || index < 0 || index >= source.Length ||
+                    source[index].GetProperty("type").GetString() != "INSTANCE") return e;
+                return e with { Type = definitions[source[index].GetProperty("componentId").GetString()!].GetProperty("alias").GetString()! };
+            }).ToArray();
+            return new([screen with { Elements = elements }], []);
+        }
+    }
+
+    private static bool IsDescendant(JsonElement node, string rootId, JsonElement[] nodes)
+    {
+        var parents = nodes.ToDictionary(n => n.GetProperty("id").GetString()!, StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var parent = node.GetProperty("parentId").ValueKind == JsonValueKind.String ? node.GetProperty("parentId").GetString() : null;
+        while (parent is not null && seen.Add(parent) && parents.TryGetValue(parent, out var ancestor))
+        {
+            if (parent == rootId) return true;
+            parent = ancestor.GetProperty("parentId").ValueKind == JsonValueKind.String ? ancestor.GetProperty("parentId").GetString() : null;
+        }
+        return false;
     }
 
     private static bool TryCrop(JsonElement node, (double Width, double Height) size, out (int Left, int Top, int Width, int Height) crop)

@@ -1,8 +1,8 @@
 # Figma-to-Gum Bridge: Implementation Specification
 
 Version: 0.2  
-Date: 2026-09-21  
-Status: Approved architecture; implementation contract. The plugin, bridge, fixtures, and compatibility tests described here have not been implemented or executed as part of preparing this document.
+Date: 2026-09-21 (workflow amended 2026-10-05)
+Status: Approved architecture; implementation contract. Implementation and verified environment status are tracked in README.md and docs/compatibility.md. The product owner approved the two-section, page-bound, standalone FRB2 publishing workflow on 2026-10-05; it supersedes the original selection/static-image workflow below.
 
 Supersedes v0.1. This version removes production-game and pre-existing Figma-design prerequisites, makes standalone onboarding explicit, defines internal ownership boundaries, and requires red-then-green development. Requirements use MUST for mandatory behavior and SHOULD for defaults that may change with a documented reason. Names of new classes, commands, and endpoints are proposed product interfaces, not existing Gum or Figma APIs.
 
@@ -17,7 +17,7 @@ The primary workflow is:
 ```text
 Figma document + mapping metadata
               |
-   Figma plugin: select / map / publish
+   Figma plugin: bind page frame / publish
               |
      immutable design snapshot
               | fixed local-only loopback HTTP
@@ -28,13 +28,11 @@ Figma document + mapping metadata
               |
      native Gum files in staging
               |
-       Gum validation / codegen / render
+       Gum validation / codegen / FRB2 run
               |
-      ownership-checked file updates
-              v
-   Bundled sample application, or a registered project
+   Bundled standalone FRB2 test application
               |
-      preview + diagnostics + verification receipt
+      runtime + diagnostics + verification receipt
               v
         Figma plugin
 ```
@@ -51,7 +49,7 @@ No existing game repository, production Figma frame, particular agent vendor, cl
 
 | Area | Contract |
 |---|---|
-| Authoring | Normal Figma designs; a plugin panel handles mapping, publication, diagnostics, and preview. No replacement layout editor. |
+| Authoring | Normal Figma designs; a plugin panel has Connection and Publish sections, with mapping and diagnostics inside Publish. No replacement layout editor. |
 | Plugin | TypeScript, with separate document-access and UI modules. |
 | Bridge | C#/.NET 10; one local application with separate conversion, Gum-tooling, storage, and file-management modules. |
 | Agent | External agent connects using thin MCP or CLI adapters. No model embedded in the plugin or converter. |
@@ -60,13 +58,13 @@ No existing game repository, production Figma frame, particular agent vendor, cl
 | Reuse | Map Figma components to generated reusable components or existing Gum controls through explicit contracts. |
 | Initial behavior | Functional controls, visual states, and named event/data connection points. Application logic stays outside conversion. |
 | Fidelity | Preserve layout intent and editable interactive elements; diagnose unsupported features; require approval for decorative rasterization. |
-| Standalone delivery | Include a sample Figma-design creator and a small Gum test application. Production-game integration is not a v1 release prerequisite. |
+| Standalone delivery | Include a sample Figma-design creator and a standalone FRB2 test application hosting native Gum. Production-game integration is not a v1 release prerequisite. |
 
 ### 2.2 Implementation defaults
 
 Use Figma Design desktop on macOS and Windows for the initial compatibility matrix. Development installation is in scope; public marketplace distribution, browser certification, and Linux packaging are deferred.
 
-Use TypeScript with strict checking and a small component-based plugin UI. The UI framework is replaceable and must not own conversion rules. Use a pinned .NET 10 SDK for bridge code and a pinned compatible Gum toolchain. Start the standalone renderer with MonoGame DesktopGL; keep FlatRedBall2 and other application-host conventions outside the conversion core. This is an implementation target, not a claim that compatibility has already been tested.
+Use TypeScript with strict checking and a small component-based plugin UI. The UI framework is replaceable and must not own conversion rules. Use a pinned .NET 10 SDK for bridge code and a pinned compatible Gum toolchain. Run the standalone test application in FRB2 on MonoGame DesktopGL; keep FRB2 and other application-host conventions outside the conversion core. This is an implementation target, not a claim that compatibility has already been tested.
 
 Use fixed local-only loopback HTTP between plugin and bridge. Use MCP stdio between an agent and the bridge's MCP adapter. The adapter forwards to the running bridge host. The CLI uses the same host API. Do not add a second writer, independent background service, cloud relay, Figma REST-token requirement, or official-Figma-MCP dependency.
 
@@ -102,7 +100,7 @@ Before feature expansion, implementation MUST prove: development-plugin installa
 
 ### 4.1 First launch: no project and no bridge
 
-Show **Selection**, **Mappings**, **Preview and changes**, and **Connection** views. An empty document shows a useful empty state: select a frame, create a design normally, or choose **Create sample design**. Do not open with a mandatory game-repository wizard.
+Show exactly two sections: **Connection** and **Publish**. Connection offers Connect or Reconnect and a registered-workspace picker. Publish contains initial document association, page-to-screen binding, optional component mappings, diagnostics, and one Publish action. An empty document explains how to create a top-level screen frame. The planned **Create sample design** action belongs inside Publish when implemented. Do not open with a mandatory game-repository wizard.
 
 Bundle a versioned built-in control-catalog artifact generated from the tested bridge adapters. Offline mapping uses that artifact; it is data, not a second TypeScript implementation of Gum conversion. Unknown project-specific mappings remain visible but unresolved until their catalog is available.
 
@@ -122,7 +120,7 @@ The default choice is Sample workspace. A later developer flow can register an e
 
 ### 4.4 Select and map
 
-Select a frame, component, or component set supported by the exporter. Show export kind, stable public alias, dependencies, and current mapping readiness. A frame exported as a Screen must be an explicit export root; nested frames stay layout containers. A selected component or component set produces a reusable component with mapped states.
+Each Figma page binds to exactly one designated top-level FRAME, which supplies the Gum Screen size and layout. Bind the selected frame once with a stable public screen alias. Publish subsequently captures that bound frame and its dependencies regardless of the current selection; layers elsewhere on the page are excluded unless referenced as dependencies. Page/frame display renames preserve the binding and public alias. Nested frames remain containers. Missing, moved, or invalid bound frames block publication with a diagnostic. A frame cannot silently move between page bindings. Existing component mappings remain editable inside Publish.
 
 Use searchable dropdowns for existing controls, properties, states, slots, fonts, and available targets. Allow plain-text entry only where a new name is appropriate, such as a public alias or application connection-point key; validate it immediately. Designers must not need to remember C# type names or Gum property names.
 
@@ -130,25 +128,25 @@ Component mapping must distinguish **Generate component** from **Reference exist
 
 ### 4.5 Analyze and publish
 
-Analyze the selected subtree and its necessary dependencies. Each diagnostic identifies the source node/property, severity, and remediation. Clicking a source diagnostic selects the relevant Figma node when available.
+Analyze the current page’s designated screen subtree and its necessary dependencies. Switching pages or changing source/binding during capture invalidates that capture; asynchronous results cannot launch a different page or target. Each diagnostic identifies the source node/property, severity, and remediation. Clicking a source diagnostic selects the relevant Figma node when available.
 
-**Publish for agent** transfers a complete immutable snapshot to the bridge. It does not apply changes to a destination project. A structurally safe snapshot with unsupported-feature diagnostics may be published as **Blocked** for agent inspection; unsafe, inconsistent, corrupt, or incomplete captures must not be finalized.
+**Publish** transfers a complete immutable one-screen snapshot to the bridge, stages native Gum output, validates it, generates fonts and C# with pinned Gum tooling, builds the bundled standalone FRB2 application, and opens that screen in FRB2. It does not apply changes to a destination project. Starting the local bridge host manually is acceptable; connecting and reconnecting use the fixed local route automatically. A structurally safe snapshot with unsupported-feature diagnostics may be published as **Blocked** for agent inspection; unsafe, inconsistent, corrupt, or incomplete captures must not be finalized.
 
-Show the snapshot ID, captured design fingerprint, selected target, and a copyable agent instruction. Changes after publication set **Source changed** and require republication. Do not silently substitute a newer design under an existing ID.
+Associate publication and runtime receipts with the exact snapshot ID, selected target, and output hash. A runtime reports Running only after drawing a frame with matching identity. Identical publishes may reuse the current matching runtime; a changed publish replaces only the host’s own runtime after the replacement is ready. Build or launch failure preserves the last good runtime and explains that the snapshot was published but could not run. Agent instructions may be provided inside Publish. Changes after publication set **Source changed** and require republication. Do not silently substitute a newer design under an existing ID.
 
 ### 4.6 Agent implementation and review
 
 The user asks an external agent to use a published snapshot. The agent requests a plan, reads diagnostics and previews, applies authorized managed changes, and implements application behavior in separate files. No embedded chat window or model API key is required.
 
-The plugin displays the Figma reference and Gum result side by side, with optional overlay/difference, viewport/state selector, and change list. Images are previews, not an embedded interactive game runtime. Interactive verification runs in the sample application.
+The plugin does not display screenshots, overlays, differences, or viewport/state image selectors. Designers inspect the published screen in the standalone FRB2 window. Native screenshot tooling and artifact routes may remain for automated fidelity fixtures and external-agent consumers; they are not required steps in the plugin workflow. Multi-screen conversion remains supported for component fixtures and future agent operations, while each plugin Publish launches one current page’s bound screen.
 
 Read-only previews and conversion plans work without any AI client. The external agent is an integration consumer, not a technical dependency of the converter.
 
 ### 4.7 State and failure UX
 
-Distinguish **Offline**, **Unpublished**, **Published**, **Source changed**, **Blocked**, **Planning**, **Plan ready**, **Applying**, **Applied - unverified**, **Verified**, **Failed**, and **Recovery required**. Always associate results with their snapshot, target profile, and output hashes.
+Distinguish **Offline**, **Unpublished**, **Published**, **Source changed**, **Blocked**, **Planning**, **Plan ready**, **Applying**, **Applied - unverified**, **Verified**, **Running in FRB2**, **Published; launch unavailable**, **Failed**, and **Recovery required**. Always associate results with their snapshot, target profile, and output hashes.
 
-An old successful preview can remain visible only with its original identity and a clear stale label. A disconnected bridge must not erase mapping edits. An empty selection must not erase the previous published snapshot. A conversion error must leave the last successfully applied UI intact.
+An old successful runtime may remain open with its original identity; the plugin labels source changes and does not claim the old run is current. A disconnected bridge must not erase mapping edits. An empty selection must not erase the previous published snapshot. A conversion error must leave the last successfully applied UI intact.
 
 ## 5. Modules, class responsibilities, and dependencies
 
@@ -205,7 +203,7 @@ The managed-file writer must accept an already validated plan; it must not invok
 apps/figma-plugin/
   manifest.template.json
   src/document/                 # Figma access and typed extraction
-  src/ui/                       # Selection, mappings, review, connection
+  src/ui/                       # Connection and Publish; mappings/diagnostics inside Publish
   src/transport/                # Typed messages and BridgeClient
   src/sample/                   # Explicit sample-design creator
 src/
@@ -289,7 +287,7 @@ The Gum guide is the starting reference, not evidence of a complete one-to-one F
 
 | Figma feature | Initial conversion rule |
 |---|---|
-| Frame explicitly selected as an export root | Gum Screen. Frames nested within that exported subtree remain containers, not nested Screens. |
+| Frame explicitly bound as the page screen (or an agent export root) | Gum Screen. Frames nested within that exported subtree remain containers, not nested Screens. |
 | Frame/group hierarchy | Preserve transform, clipping, order, and parenting using supported containers. |
 | Fixed dimensions | Absolute dimensions. |
 | Fill dimensions | Parent-relative dimensions or proportional sharing, according to the source layout. |
@@ -297,7 +295,7 @@ The Gum guide is the starting reference, not evidence of a complete one-to-one F
 | Horizontal/vertical Auto Layout | Gum stack layout, explicit spacing, and translated per-child cross-axis alignment. |
 | Padding | Explicit outer/inner-container lowering where needed, with no visible background participating as a layout child. |
 | Constraints and min/max | Translate supported anchoring, dimension, and limit properties; validate at multiple viewport sizes. |
-| Simple solid background | A native visual child behind content; do not assign nonexistent fill behavior to an invisible Container. |
+| Simple solid frame/rectangle background | A native visual child behind content; do not assign nonexistent fill behavior to an invisible Container. |
 | Plain uniform-style text | Native Text with explicit font mapping, sizing, alignment, wrapping, and supported metrics. |
 | Raster image | Sprite with recorded crop, sizing, scale, and asset hash. |
 | Reusable component/instance | Shared Gum component definition plus supported instance overrides. |
@@ -316,6 +314,8 @@ Source rotation/transform conventions must be converted and tested. Compound ske
 Advanced grids, wrapping combinations not covered by fixtures, arbitrary vector effects/masks, mixed-style text, variable-font behavior not verified by the target, and animated prototype transitions are unsupported until a tested rule exists.
 
 An unsupported feature produces either an error or a documented, approved decorative fallback. Publication for diagnosis may still succeed; planning/apply remain blocked until resolved. It must not disappear from the output. Rasterizing an entire screen, interactive control, dynamic text field, or layout subtree containing those elements is prohibited.
+
+Plain solid or empty rectangles use the native leaf-container/background rule. Decorative leaf polygons and unsupported rectangle paints/corners may use an explicitly approved PNG with the same bounded noninteractive geometry guards; they are not silently flattened. For whole-pixel layer boxes whose visible pixels remain inside the box, full-node PNG export preserves the original geometry and auto-layout slot. Overflow rasterization still needs verified integer render dimensions and a non-stack parent. The export-bounds mode participates in the approval fingerprint. Their versioned receipt distinguishes decorative-shape fallback from effects/strokes. Polygon point-count and paint/corner changes invalidate approval.
 
 Decorative fallback approval is stored against the node and feature fingerprint. Material changes invalidate the approval. Show which editability/resolution behavior is lost.
 
@@ -549,13 +549,13 @@ For simple geometry, the default fixture target is at most one logical pixel of 
 |---|---|---|
 | A01 | Open the plugin in a blank document with no bridge or game. | Useful empty state, mapping UI and built-in catalog work; preview/publish requirements are clear. |
 | A02 | Explicitly create the sample design, initialize Sample workspace, and connect automatically. | Sample assets/controls/references are available without touching existing user layers or a game repository. |
-| A03 | Publish the supported menu and request generation through CLI/MCP. | Native Gum loads, generated C# compiles, sample runtime displays the menu, preview returns to plugin. |
+| A03 | Publish the supported menu and request generation through CLI/MCP. | Native Gum loads, generated C# compiles, standalone FRB2 runtime displays the menu, and an identity-matched runtime receipt returns to the plugin. |
 | A04 | Repeat identical design/mappings/toolchain inputs. | Zero managed-file diff, no timestamp-only manifest changes, no duplicate assets/components. |
 | A05 | Change button style, spacing, and label in Figma after binding its handler. | Visuals update; handwritten handler is byte-for-byte unchanged and fires exactly once. |
 | A06 | Rename only a Figma layer display name. | Public alias/binding identity remains stable and integration compiles. |
 | A07 | Explicitly rename a public contract or delete a referenced control. | Breaking-change plan is visible and requires approval; no silent handler loss. |
 | A08 | Edit generated visuals locally, or place an unknown file at an output path. | Report drift/ownership conflict; no silent replacement. |
-| A09 | Share one component across two screens, then export only one screen. | Reuse the definition; do not prune the other screen or still-referenced assets. |
+| A09 | Share one component across two screens, then export only one screen. | Reuse the definition; do not prune the other screen or still-referenced assets. Stage and validate both screens; the initial plugin screenshot may show only the first selected screen. Inspect the full multi-screen UI in the standalone sample runtime when available. |
 | A10 | Input, focus, disabled behavior, text entry, scrolling, and screen recreation. | Native behavior works; no duplicate subscriptions or clipped-but-nonfunctional scroll region. |
 | A11 | Render both reference sizes and required states. | Layout responds; reviewed visual criteria pass; preview identifies exact case/output. |
 | A12 | Use unsupported effects on decorative and interactive nodes. | Decorative fallback requires scoped approval; unsupported interaction blocks generation. |
@@ -572,11 +572,11 @@ For simple geometry, the default fixture target is at most one logical pixel of 
 
 V1 is complete when the standalone acceptance cases pass, setup is reproducible, and compatibility/limits are documented. A named production game is not required. Use any available compatible real agent for A20 and record its identity/version; passing one client does not certify every client.
 
-A later FlatRedBall2 integration validates that consumer's project conventions and Gum/backend versions. It must not force game-specific references into Conversion or reopen already proven core rules.
+The standalone FRB2 adapter validates its pinned Gum/backend versions. A later production integration validates that consumer’s project conventions. It must not force game-specific references into Conversion or reopen already proven core rules.
 
 ## 14. Ordered, agent-sized implementation plan
 
-The [Figma Plugin Linear project](https://linear.app/nerdino/project/figma-plugin-0331c44c25c1) tracks these implementation tickets. Execute in the table order below, **not** Linear issue-number order. Later tickets build on completed earlier work; do not start MCP scaffolding before proving native Gum output. Every ticket follows Section 13.1. If one exceeds a focused change with one testable outcome, split it while preserving dependencies. Each linked ticket owns its work status and handoff; this table retains the approved acceptance contract.
+The [Figma Plugin Linear project](https://linear.app/nerdino/project/figma-plugin-0331c44c25c1) tracks these implementation tickets. Execute in the table order below, **not** Linear issue-number order. Later tickets build on completed earlier work; do not start MCP scaffolding before proving native Gum output. Every ticket follows Section 13.1. If one exceeds a focused change with one testable outcome, split it while preserving dependencies. Each linked ticket owns its work status and handoff; this table retains the approved acceptance contract. The 2026-10-05 owner amendment changes the designer workflow to a bound page screen and standalone FRB2 run, without widening converter/control coverage or implementing managed application updates. Legacy screenshot ticket descriptions describe automated/agent checks, not additional plugin sections.
 
 | Implementation ticket | Red test / green exit condition |
 |---|---|
@@ -595,7 +595,7 @@ The [Figma Plugin Linear project](https://linear.app/nerdino/project/figma-plugi
 | [Clipping, image crop/scale, transforms and negative cases](https://linear.app/nerdino/issue/GAM-220) | Supported geometry matches; unsupported interactive transforms diagnose instead of flattening. |
 | [Font/asset mapping, deterministic inputs and fallback review UI](https://linear.app/nerdino/issue/GAM-216) | Missing fonts/assets block; approved decorative fallback is scoped and traceable. |
 | [Component catalog, document mappings and stable aliases](https://linear.app/nerdino/issue/GAM-218) | Built-in offline catalog works; custom catalog mismatch and alias collisions are explicit. |
-| [Shared components, dependencies, instances and overrides](https://linear.app/nerdino/issue/GAM-223) | Two screens share one definition without duplicate output or unauthorized component rewrites. |
+| [Shared components, dependencies, instances and overrides](https://linear.app/nerdino/issue/GAM-223) | Two screens share one definition without duplicate output or unauthorized component rewrites; both are staged and checked in conversion fixtures. The plugin publishes one page-bound screen and opens it in standalone FRB2, with its shared dependencies. Per-screen screenshot selection is outside this task. |
 | [Button adapter and state/property/connection contracts](https://linear.app/nerdino/issue/GAM-221) | Required states and real click/focus/disabled behavior pass in the sample. |
 | [TextBox and scroll adapters](https://linear.app/nerdino/issue/GAM-222) | Text entry and actual scrolling pass; clipping-only substitutes fail tests. |
 | [Explicit sample-design creator and complete reference fixtures](https://linear.app/nerdino/issue/GAM-225) | Creates an isolated page and realistic responsive references; repeat invocation cannot damage user layers. |

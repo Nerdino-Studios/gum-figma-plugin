@@ -2,16 +2,20 @@ import { hashBytes } from '../hash.ts';
 export { hashBytes } from '../hash.ts';
 import { readSelectedRoots, type ExtractionDiagnostic } from './selection.ts';
 import { encodeUtf8 } from './utf8.ts';
+import { rasterFallbackPlan } from './raster-fallback.ts';
 
 export interface SourceNode {
   id: string; name: string; type: string; x: number; y: number; width: number; height: number; visible: boolean;
   children?: readonly SourceNode[]; layoutMode?: string; clipsContent?: boolean;
-  exportAsync?: (settings: { format: 'PNG'; constraint: { type: 'SCALE'; value: 1 } }) => Promise<Uint8Array>;
+  getMainComponentAsync?: () => Promise<SourceNode | null>;
+  overrides?: readonly { id: string; overriddenFields: readonly string[] }[];
+  exportAsync?: (settings: { format: 'PNG'; constraint: { type: 'SCALE'; value: 1 }; useAbsoluteBounds?: boolean; contentsOnly?: boolean }) => Promise<Uint8Array>;
   absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null;
   absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null;
   reactions?: readonly unknown[]; strokeWeight?: number; strokeAlign?: string;
   strokeTopWeight?: number; strokeRightWeight?: number; strokeBottomWeight?: number; strokeLeftWeight?: number;
   dashPattern?: readonly number[]; strokeDashes?: readonly number[]; strokeJoin?: string; strokeCap?: string; strokeMiterLimit?: number;
+  pointCount?: number; cornerSmoothing?: number;
   cornerRadius?: number | symbol; rectangleCornerRadii?: readonly number[]; isMask?: boolean; blendMode?: string;
   textAlignHorizontal?: string; textAlignVertical?: string; lineHeight?: unknown; letterSpacing?: unknown;
   textCase?: string; textDecoration?: string; paragraphSpacing?: number; textAutoResize?: string;
@@ -26,7 +30,8 @@ export interface SourceNode {
   minWidth?: number | null; maxWidth?: number | null; minHeight?: number | null; maxHeight?: number | null;
 }
 export interface DesignNode {
-  id: string; parentId: string | null; type: 'FRAME' | 'TEXT' | 'IMAGE'; name: string;
+  id: string; parentId: string | null; type: 'FRAME' | 'TEXT' | 'IMAGE' | 'INSTANCE'; name: string;
+  componentId?: string;
   x: number; y: number; width: number; height: number; visible: boolean;
   layoutMode?: string; clipsContent?: boolean; characters?: string; fontSize?: number; fontFamily?: string; fontStyle?: string; color?: string; imageHash?: string; scaleMode?: string;
   imageTransform?: readonly (readonly number[])[];
@@ -64,6 +69,7 @@ export async function captureSelection(
   budget: Partial<typeof limits> = {}, aliases: Readonly<Record<string, string>> = {},
   approvals: readonly { nodeId: string; feature: string; fingerprint: string }[] = [],
   rootMappings: readonly { rootId: string; mode: 'generate'; catalogId: string; revision: string; controlId: 'native.frame' }[] = [],
+  componentMappings: Readonly<Record<string, { alias: string; mode: 'generate' } | { alias: string; mode: 'reference'; controlId: string; targetWidth: number; targetHeight: number }>> = {},
 ) {
   if (!documentNamespace || /[/\\]/.test(documentNamespace)) throw new Error('Document namespace must be a path-free identity');
   const bound = { ...limits, ...budget };
@@ -76,9 +82,15 @@ export async function captureSelection(
   const roots = readSelectedRoots(selection, aliases);
   const diagnostics: ExtractionDiagnostic[] = [...roots.diagnostics];
   const nodes: DesignNode[] = [];
+  let totalNodes = 0;
   const assets: { hash: string; bytes: Uint8Array }[] = [];
   const pending: { node: DesignNode; sourceHash: string }[] = [];
-  const fallbackExports: { node: DesignNode; source: SourceNode }[] = [];
+  const fallbackExports: { node: DesignNode; source: SourceNode; useAbsoluteBounds: boolean }[] = [];
+  const instances: { node: DesignNode; source: SourceNode }[] = [];
+  const components: ({ id: string; alias: string; mode: 'generate'; nodes: DesignNode[] } |
+    { id: string; alias: string; mode: 'reference'; controlId: string; width: number; height: number })[] = [];
+  const componentSources = new Map<string, SourceNode>();
+  const definitionObservations: { source: SourceNode; fingerprint: string; childIds: string[]; graph: string }[] = [];
   const selected = selection.filter(root => root.type === 'FRAME').sort((a, b) => a.id.localeCompare(b.id));
   const observed: { node: SourceNode; fingerprint: string; childIds?: string[]; childCount?: number }[] = [];
   const mixed = (value: unknown) => typeof value === 'symbol' ? 'MIXED' : value ?? null;
@@ -110,6 +122,7 @@ export async function captureSelection(
     constraints: node.constraints ?? null, minWidth: node.minWidth ?? null, maxWidth: node.maxWidth ?? null,
     minHeight: node.minHeight ?? null, maxHeight: node.maxHeight ?? null,
     cornerRadius: typeof node.cornerRadius === 'symbol' ? 'MIXED' : node.cornerRadius ?? null,
+    pointCount: node.pointCount ?? null, cornerSmoothing: node.cornerSmoothing ?? null,
     rectangleCornerRadii: node.rectangleCornerRadii ?? null, isMask: node.isMask ?? null, blendMode: node.blendMode ?? null,
     textAlignHorizontal: node.textAlignHorizontal ?? null, textAlignVertical: node.textAlignVertical ?? null,
     lineHeight: mixed(node.lineHeight), letterSpacing: mixed(node.letterSpacing), textCase: node.textCase ?? null,
@@ -117,35 +130,80 @@ export async function captureSelection(
     textAutoResize: node.textAutoResize ?? null, textTruncation: node.textTruncation ?? null,
     maxLines: node.maxLines ?? null, fontWeight: node.fontWeight ?? null, textStyleId: node.textStyleId ?? null,
     fillStyleId: node.fillStyleId ?? null, boundVariables: mixed(node.boundVariables),
+    overrides: node.overrides ?? null,
   });
+  function definitionGraph(source: SourceNode): string {
+    const graph: unknown[] = [];
+    const stack = [{ node: source, depth: 0 }];
+    while (stack.length && graph.length <= bound.maxNodes) {
+      const { node, depth } = stack.pop()!;
+      if (depth > bound.maxDepth) return 'over-depth';
+      const children = node.children ?? [];
+      if (children.length > bound.maxNodes) return 'over-budget';
+      graph.push([propertySnapshot(node), children.map(child => child.id)]);
+      for (let i = children.length - 1; i >= 0; i--) stack.push({ node: children[i], depth: depth + 1 });
+    }
+    return graph.length > bound.maxNodes ? 'over-budget' : hash(graph);
+  }
+  function hasUnsupportedComponentTransform(transform: SourceNode['relativeTransform']): boolean {
+    return transform !== undefined && (!Array.isArray(transform) || transform.length !== 2 ||
+      !transform.every(row => Array.isArray(row) && row.length === 3 && row.every(Number.isFinite)) ||
+      Math.abs(transform[0][0] - 1) > 0.00001 || Math.abs(transform[0][1]) > 0.00001 ||
+      Math.abs(transform[1][0]) > 0.00001 || Math.abs(transform[1][1] - 1) > 0.00001);
+  }
   function fail(node: SourceNode, property: string, message: string, code = 'UNSUPPORTED_FEATURE') {
-    diagnostics.push({ code, severity: 'error', nodeId: node.id, property, message });
+    diagnostics.push({ code, severity: 'error', nodeId: node.id, property, message: `${node.name}: ${message}` });
   }
   function visit(node: SourceNode, parentId: string | null, depth: number, parent?: SourceNode, interactiveAncestor = false, rotatedAncestor = false) {
-    if (depth > bound.maxDepth || nodes.length >= bound.maxNodes) { fail(node, 'children', 'Capture depth/node budget exceeded'); return; }
+    if (depth > bound.maxDepth || totalNodes >= bound.maxNodes) { fail(node, 'children', 'Capture depth/node budget exceeded'); return; }
     const observation: (typeof observed)[number] = { node, fingerprint: hash(propertySnapshot(node)) };
     observed.push(observation);
     if (!node.id || !node.name) { fail(node, 'identity', 'Source ID and display name are required'); return; }
-    if (!['FRAME', 'TEXT', 'RECTANGLE'].includes(node.type)) { fail(node, 'type', `Unsupported node: ${node.type}`); return; }
-    const needsFallback = (node.effects?.length ?? 0) > 0 || (node.strokes?.length ?? 0) > 0;
-    const fingerprint = needsFallback ? hash({ namespace: documentNamespace, node: propertySnapshot(node), feature: 'effects/strokes' }) : '';
-    const decorative = node.type === 'RECTANGLE' && parentId !== null && !(node.children?.length) &&
-      !interactiveAncestor && !(node.reactions?.length) && !rotatedAncestor && !node.rotation && parent?.layoutMode === 'NONE';
+    if (!['FRAME', 'TEXT', 'RECTANGLE', 'POLYGON', 'INSTANCE'].includes(node.type)) { fail(node, 'type', `Unsupported node: ${node.type}`); return; }
+    if (node.type === 'INSTANCE') {
+      if (!parentId || !node.getMainComponentAsync || ![node.x, node.y, node.width, node.height].every(Number.isFinite) || node.width < 0 || node.height < 0)
+        fail(node, 'instance', 'Instance needs a parent, bounded geometry and resolvable definition');
+      if (node.opacity !== undefined && node.opacity !== 1) fail(node, 'opacity', 'Instance opacity is not an exposed component property');
+      if (node.rotation !== undefined && (!Number.isFinite(node.rotation) || node.rotation !== 0) ||
+          node.effects?.length || node.strokes?.length || node.reactions?.length)
+        fail(node, 'instance', 'Instance rotation, effects, strokes and reactions require a verified control contract');
+      if (hasUnsupportedComponentTransform(node.relativeTransform))
+        fail(node, 'relativeTransform', 'Skew, scale and flip transforms are unsupported on instances');
+      if (node.layoutSizingHorizontal && node.layoutSizingHorizontal !== 'FIXED' ||
+          node.layoutSizingVertical && node.layoutSizingVertical !== 'FIXED' ||
+          node.constraints?.horizontal && node.constraints.horizontal !== 'LEFT' ||
+          node.constraints?.vertical && node.constraints.vertical !== 'TOP' ||
+          [node.minWidth, node.maxWidth, node.minHeight, node.maxHeight].some(value => value != null))
+        fail(node, 'instance', 'Responsive instance sizing and limits require a verified control contract');
+      if (node.overrides?.some(change => change.id !== node.id ||
+        change.overriddenFields.some(field => !['x', 'y', 'width', 'height', 'visible'].includes(field))))
+        fail(node, 'overrides', 'Visual/child overrides require an explicit exposed-property contract');
+      const output: DesignNode = { id: node.id, parentId, name: node.name, type: 'INSTANCE', x: node.x, y: node.y,
+        width: node.width, height: node.height, visible: node.visible };
+      nodes.push(output);
+      totalNodes++;
+      instances.push({ node: output, source: node });
+      return;
+    }
+    const shape = node.type === 'RECTANGLE' || node.type === 'POLYGON';
+    const shapeFill = typeof node.fills === 'symbol' ? [] : node.fills ?? [];
+    const unsupportedShape = node.type === 'POLYGON' || shape && (
+      shapeFill.length > 1 || shapeFill.some(paint => !['SOLID', 'IMAGE'].includes(paint.type)) ||
+      !!node.cornerRadius || node.rectangleCornerRadii?.some(radius => radius !== 0));
+    const needsFallback = unsupportedShape || (node.effects?.length ?? 0) > 0 || (node.strokes?.length ?? 0) > 0;
+    const feature = unsupportedShape ? 'decorative-shape' : 'effects/strokes';
+    const raster = rasterFallbackPlan(node, parentId, parent, interactiveAncestor, rotatedAncestor);
+    const fingerprint = needsFallback ? hash({ namespace: documentNamespace, node: propertySnapshot(node), feature,
+      ...(raster.useAbsoluteBounds ? { rasterBounds: 'node' } : {}) }) : '';
     const box = node.absoluteBoundingBox;
-    const render = node.absoluteRenderBounds;
-    const bounded = box && render && [box.x, box.y, box.width, box.height, render.x, render.y, render.width, render.height].every(Number.isFinite) &&
-      render.width > 0 && render.height > 0 && Number.isInteger(render.width) && Number.isInteger(render.height) &&
-      render.width <= 4096 && render.height <= 4096 && render.width * render.height <= 4194304 &&
-      !!parent?.absoluteBoundingBox && Math.abs(box.x - node.x - parent.absoluteBoundingBox.x) < 1e-6 &&
-      Math.abs(box.y - node.y - parent.absoluteBoundingBox.y) < 1e-6 &&
-      Math.abs(box.width - node.width) < 1e-6 && Math.abs(box.height - node.height) < 1e-6;
-    const eligible = decorative && !!bounded;
+    const render = raster.bounds;
+    const eligible = !!render;
     const approved = needsFallback && eligible &&
-      approvals.some(entry => entry.nodeId === node.id && entry.feature === 'effects/strokes' && entry.fingerprint === fingerprint);
+      approvals.some(entry => entry.nodeId === node.id && entry.feature === feature && entry.fingerprint === fingerprint);
     if (needsFallback && !approved) diagnostics.push({ code: 'UNSUPPORTED_FEATURE', severity: 'error', nodeId: node.id,
-      property: 'effects/strokes', ...(eligible ? { fingerprint } : {}), message: eligible
-        ? 'Decorative raster fallback: loses editability and resolution independence. Approve this exact node/feature to export PNG.'
-        : 'Effects and strokes on interactive content or unverifiable raster geometry cannot be rasterized.' });
+      property: feature, ...(eligible ? { fingerprint } : {}), message: eligible
+        ? `Decorative raster fallback for "${node.name}": loses editability and resolution independence. Approve this exact node/feature to export PNG.`
+        : `${node.name}: ${raster.reason}` });
     const rotated = node.rotation !== undefined && node.rotation !== 0;
     if (rotated && (node.type === 'TEXT' || node.type === 'FRAME' && (node.children?.length ?? 0) > 0 || parentId === null))
       fail(node, 'rotation', 'Rotated text or interactive container has unverified hit-test geometry');
@@ -162,8 +220,8 @@ export async function captureSelection(
         fail(node, 'relativeTransform', 'Skew, scale and flip transforms are unsupported; do not flatten interactive geometry');
     }
     if (node.opacity !== undefined && node.opacity !== 1) fail(node, 'opacity', 'Non-opaque nodes are not supported');
-    if (node.cornerRadius !== undefined && node.cornerRadius !== 0) fail(node, 'cornerRadius', 'Rounded corners are not captured');
-    if (node.rectangleCornerRadii?.some(radius => radius !== 0)) fail(node, 'rectangleCornerRadii', 'Rounded corners are not captured');
+    if (!approved && node.cornerRadius !== undefined && node.cornerRadius !== 0) fail(node, 'cornerRadius', 'Rounded corners are not captured');
+    if (!approved && node.rectangleCornerRadii?.some(radius => radius !== 0)) fail(node, 'rectangleCornerRadii', 'Rounded corners are not captured');
     if (node.isMask) fail(node, 'isMask', 'Masks are not captured');
     if (node.blendMode && node.blendMode !== 'PASS_THROUGH' && node.blendMode !== 'NORMAL') fail(node, 'blendMode', 'Blend mode is not captured');
     if (node.boundVariables && Object.keys(node.boundVariables).length) fail(node, 'boundVariables', 'Variables are not resolved');
@@ -245,23 +303,26 @@ export async function captureSelection(
         fail(node, 'fills', 'Paint opacity, visibility, blend or variables are not captured');
       }
     }
-    if (!approved && (fill.length > 1 || fill.some(p => p.type !== (node.type === 'RECTANGLE' ? 'IMAGE' : 'SOLID')))) fail(node, 'fills', 'Only one solid frame/text fill or raster image is supported');
-    const solid = node.type !== 'RECTANGLE' ? fill[0] : undefined;
+    const image = node.type === 'RECTANGLE' && fill.length === 1 && fill[0].type === 'IMAGE';
+    const nativeRectangle = node.type === 'RECTANGLE' && !approved && !image;
+    if (!approved && (fill.length > 1 || fill.some(paint => paint.type !== (image ? 'IMAGE' : 'SOLID'))))
+      fail(node, 'fills', 'Use one opaque solid fill or a FIT/FILL/CROP image; decorative shape paints need explicit PNG approval.');
+    const solid = !image && !approved ? fill[0] : undefined;
     if (solid && (solid.visible === false || solid.opacity !== undefined && solid.opacity !== 1 ||
       !solid.color || ![solid.color.r, solid.color.g, solid.color.b].every(v => Number.isFinite(v) && v >= 0 && v <= 1))) {
       fail(node, 'fills', 'Solid fill must have opaque finite RGB');
     }
-    if (node.type === 'RECTANGLE' && !approved && (fill.length !== 1 || fill[0].type !== 'IMAGE' || !fill[0].imageHash || !['FIT', 'FILL', 'CROP'].includes(fill[0].scaleMode ?? ''))) {
-      fail(node, 'fills', 'Rectangle requires a FIT/FILL raster image'); return;
+    if (image && !approved && (!fill[0].imageHash || !['FIT', 'FILL', 'CROP'].includes(fill[0].scaleMode ?? ''))) {
+      fail(node, 'fills', 'Image-filled rectangle requires an available FIT/FILL/CROP raster image'); return;
     }
-    if (node.type === 'RECTANGLE' && (node.constraints?.horizontal === 'STRETCH' || node.constraints?.vertical === 'STRETCH' ||
+    if ((image || approved) && (node.constraints?.horizontal === 'STRETCH' || node.constraints?.vertical === 'STRETCH' ||
       ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => node[key as keyof SourceNode] != null)))
       fail(node, 'constraints', 'Responsive image dimensions and limits require verified FIT/FILL aspect-ratio rendering');
-    if (node.type === 'RECTANGLE' && !approved && fill[0]?.scaleMode === 'CROP') {
+    if (image && !approved && fill[0]?.scaleMode === 'CROP') {
       const matrix = fill[0].imageTransform;
       if (!Array.isArray(matrix) || matrix.length !== 2 || !matrix.every(row => Array.isArray(row) && row.length === 3 && row.every(Number.isFinite)))
         fail(node, 'fills.imageTransform', 'CROP requires a finite 2x3 image transform');
-    } else if (node.type === 'RECTANGLE' && !approved && fill[0]?.imageTransform)
+    } else if (image && !approved && fill[0]?.imageTransform)
       fail(node, 'fills.imageTransform', 'Only CROP may specify an image transform');
     if (node.type === 'TEXT' && (typeof node.fontSize !== 'number' || !Number.isFinite(node.fontSize) || node.fontSize <= 0 || typeof node.characters !== 'string' || !(typeof node.fontName === 'object' && node.fontName !== null && 'family' in node.fontName && 'style' in node.fontName && typeof node.fontName.family === 'string' && typeof node.fontName.style === 'string')))  {
       fail(node, 'text', 'Text requires uniform style and characters'); return;
@@ -270,13 +331,13 @@ export async function captureSelection(
     const color = solid?.color && [solid.color.r, solid.color.g, solid.color.b].every(v => Number.isFinite(v) && v >= 0 && v <= 1)
       ? `#${[solid.color.r, solid.color.g, solid.color.b].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('')}` : undefined;
     const output: DesignNode = {
-      id: node.id, parentId, type: node.type === 'RECTANGLE' ? 'IMAGE' : node.type as 'FRAME' | 'TEXT', name: node.name,
+      id: node.id, parentId, type: approved || image ? 'IMAGE' : nativeRectangle ? 'FRAME' : node.type as 'FRAME' | 'TEXT', name: node.name,
       x: approved ? node.x + render!.x - box!.x : node.x,
       y: approved ? node.y + render!.y - box!.y : node.y,
       width: approved ? render!.width : node.width,
       height: approved ? render!.height : node.height, visible: node.visible,
       ...(color && !approved ? { color } : {}),
-      ...(node.type === 'FRAME' ? { layoutMode: node.layoutMode ?? 'NONE', clipsContent: node.clipsContent ?? false } : {}),
+      ...(node.type === 'FRAME' || nativeRectangle ? { layoutMode: node.layoutMode ?? 'NONE', clipsContent: node.clipsContent ?? false } : {}),
       ...(node.layoutSizingHorizontal === 'HUG' ? { horizontalSizing: 'HUG' as const } :
         node.layoutSizingHorizontal === 'FILL' || node.constraints?.horizontal === 'STRETCH' ||
         node.layoutAlign === 'STRETCH' && parent?.layoutMode === 'VERTICAL' ? { horizontalSizing: 'FILL' as const } : {}),
@@ -297,22 +358,23 @@ export async function captureSelection(
         { layoutAlign: node.layoutAlign as 'MIN' | 'CENTER' | 'MAX' } : {}),
       ...(rotated && Number.isFinite(node.rotation) ? { rotation: node.rotation } : {}),
       ...(node.type === 'TEXT' ? { characters: node.characters!, fontSize: node.fontSize as number, fontFamily: (node.fontName as { family: string }).family, fontStyle: (node.fontName as { style: string }).style } : {}),
-      ...(approved ? { scaleMode: 'FIT', fallback: { feature: 'effects/strokes', fingerprint } } : {}),
+      ...(approved ? { scaleMode: 'FIT', fallback: { feature, fingerprint } } : {}),
       ...(node.type === 'RECTANGLE' && !approved && fill[0]?.imageHash ? { scaleMode: fill[0].scaleMode,
         ...(fill[0].scaleMode === 'CROP' && Array.isArray(fill[0].imageTransform) ? { imageTransform: fill[0].imageTransform as readonly (readonly number[])[] } : {}) } : {}),
     };
     nodes.push(output);
-    if (approved) fallbackExports.push({ node: output, source: node });
+    totalNodes++;
+    if (approved) fallbackExports.push({ node: output, source: node, useAbsoluteBounds: raster.useAbsoluteBounds });
     else if (node.type === 'RECTANGLE' && fill[0]?.imageHash) pending.push({ node: output, sourceHash: fill[0].imageHash });
     // At the boundary, do not even touch the children getter. Block conservatively.
-    if (depth >= bound.maxDepth || nodes.length >= bound.maxNodes) {
+    if (depth >= bound.maxDepth || totalNodes >= bound.maxNodes) {
       fail(node, 'children', 'Capture stopped at depth/node budget'); return;
     }
     const children = node.children ?? [];
     observation.childCount = children.length;
     // Reject wide branches before reading any child IDs. Neither diagnostics nor freshness
     // may scale with a subtree that the capture budget cannot visit.
-    if (children.length > bound.maxNodes - nodes.length) {
+    if (children.length > bound.maxNodes - totalNodes) {
       fail(node, 'children', 'Capture stopped at node budget'); return;
     }
     observation.childIds = children.map(child => child.id);
@@ -320,10 +382,73 @@ export async function captureSelection(
       interactiveAncestor || !!node.reactions?.length, rotatedAncestor || !!node.rotation);
   }
   for (const root of selected) visit(root, null, 0);
+  const screenNodes = nodes.splice(0);
+  // Resolve only transitive definitions; never scan the entire Figma document.
+  for (let index = 0; index < instances.length && index < bound.maxNodes; index++) {
+    const item = instances[index];
+    try {
+      const source = await item.source.getMainComponentAsync?.();
+      if (!source || source.type !== 'COMPONENT' || !source.id) {
+        diagnostics.push({ code: 'UNRESOLVED_COMPONENT', severity: 'error', nodeId: item.node.id, property: 'mainComponent', message: 'Instance definition unavailable' });
+        continue;
+      }
+      item.node.componentId = source.id;
+      const mapping = componentMappings[source.id];
+      if (mapping?.mode === 'reference' && (item.node.width !== source.width || item.node.height !== source.height))
+        diagnostics.push({ code: 'INVALID_CONTROL_CONTRACT', severity: 'error', nodeId: item.node.id, property: 'bounds',
+          message: 'Referenced control size must match its unstyled placeholder; resizing requires a verified target contract' });
+      if (componentSources.has(source.id)) continue;
+      if (!mapping || !/^[A-Za-z][A-Za-z0-9_]*$/.test(mapping.alias)) {
+        diagnostics.push({ code: 'UNRESOLVED_COMPONENT', severity: 'error', nodeId: item.node.id, property: 'mapping', message: 'Map the component definition to a generated public alias' });
+        continue;
+      }
+      componentSources.set(source.id, source);
+      definitionObservations.push({ source, fingerprint: hash(propertySnapshot(source)), childIds: (source.children ?? []).map(child => child.id), graph: definitionGraph(source) });
+      if (mapping.mode === 'reference') {
+        // The registered component owns its visuals. This unstyled placeholder cannot
+        // authorize modifying its children, paint, skins or behavior.
+        if (hasUnsupportedComponentTransform(source.relativeTransform))
+          fail(source, 'relativeTransform', 'Skew, scale and flip transforms are unsupported on referenced placeholders');
+        if (mapping.controlId !== mapping.alias || source.width !== mapping.targetWidth || source.height !== mapping.targetHeight ||
+          source.children?.length || (typeof source.fills === 'symbol' || !!source.fills?.length) || source.effects?.length || source.strokes?.length ||
+          source.reactions?.length || source.rotation || source.opacity !== undefined && source.opacity !== 1 ||
+          source.layoutMode !== 'NONE' || source.clipsContent || source.boundVariables && Object.keys(source.boundVariables).length) {
+          fail(source, 'reference', 'Referenced control needs an unstyled placeholder and an exact registered target contract');
+          continue;
+        }
+        if (![source.width, source.height].every(value => Number.isFinite(value) && value > 0)) {
+          fail(source, 'bounds', 'Referenced control placeholder dimensions must be finite and positive');
+          continue;
+        }
+        components.push({ id: source.id, alias: mapping.alias, mode: 'reference', controlId: mapping.controlId,
+          width: source.width, height: source.height });
+        continue;
+      }
+      visit({ ...source, type: 'FRAME' }, null, 0);
+      components.push({ id: source.id, alias: mapping.alias, mode: 'generate', nodes: nodes.splice(0) });
+    } catch {
+      diagnostics.push({ code: 'UNRESOLVED_COMPONENT', severity: 'error', nodeId: item.node.id, property: 'mainComponent', message: 'Cannot resolve instance definition' });
+    }
+  }
+  nodes.push(...screenNodes);
+  for (const item of instances) {
+    try {
+      const current = await item.source.getMainComponentAsync?.();
+      const captured = definitionObservations.find(entry => entry.source.id === item.node.componentId);
+      if (!current || current.id !== item.node.componentId || !captured ||
+          hash(propertySnapshot(current)) !== captured.fingerprint ||
+          definitionGraph(current) !== captured.graph)
+        diagnostics.push({ code: 'SOURCE_CHANGED_DURING_CAPTURE', severity: 'error', nodeId: item.node.id, property: 'mainComponent', message: 'Instance definition changed during capture' });
+    } catch {
+      diagnostics.push({ code: 'SOURCE_CHANGED_DURING_CAPTURE', severity: 'error', nodeId: item.node.id, property: 'mainComponent', message: 'Instance definition unavailable after capture' });
+    }
+  }
+  if (totalNodes > bound.maxNodes || instances.length > bound.maxNodes) diagnostics.push({ code: 'UNSUPPORTED_FEATURE', severity: 'error', nodeId: '', property: 'components', message: 'Component dependency budget exceeded' });
   for (const item of fallbackExports) {
     try {
       if (!item.source.exportAsync) throw new Error('Figma PNG export unavailable');
-      const bytes = await item.source.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+      const bytes = await item.source.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 },
+        ...(item.useAbsoluteBounds ? { useAbsoluteBounds: true, contentsOnly: true } : {}) });
       if (bytes.length < 24 || bytes.length > bound.maxAssetBytes ||
         ![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte) ||
         new DataView(bytes.buffer, bytes.byteOffset).getUint32(16) !== item.node.width ||
@@ -332,7 +457,7 @@ export async function captureSelection(
       item.node.imageHash = hashBytes(bytes);
       if (!assets.some(asset => asset.hash === item.node.imageHash)) assets.push({ hash: item.node.imageHash, bytes });
     } catch (error) { diagnostics.push({ code: 'UNRESOLVED_ASSET', severity: 'error', nodeId: item.node.id,
-      property: 'effects/strokes', message: `Decorative PNG export failed: ${error instanceof Error ? error.message : 'unknown error'}` }); }
+      property: item.node.fallback!.feature, message: `Decorative PNG export failed: ${error instanceof Error ? error.message : 'unknown error'}` }); }
   }
   for (const item of pending) {
     const image = images.getImageByHash(item.sourceHash);
@@ -342,6 +467,9 @@ export async function captureSelection(
     item.node.imageHash = hashBytes(bytes);
     if (!assets.some(asset => asset.hash === item.node.imageHash)) assets.push({ hash: item.node.imageHash, bytes });
   }
+  if (definitionObservations.some(entry => hash(propertySnapshot(entry.source)) !== entry.fingerprint ||
+      definitionGraph(entry.source) !== entry.graph))
+    diagnostics.push({ code: 'SOURCE_CHANGED_DURING_CAPTURE', severity: 'error', nodeId: selected[0]?.id ?? '', property: 'definition', message: 'Component definition changed during capture' });
   if (observed.some(entry => hash(propertySnapshot(entry.node)) !== entry.fingerprint ||
       entry.childCount !== undefined && ((entry.node.children ?? []).length !== entry.childCount ||
         entry.childIds !== undefined && canonicalize((entry.node.children ?? []).map(child => child.id)) !== canonicalize(entry.childIds)))) {
@@ -351,11 +479,13 @@ export async function captureSelection(
   const selectedRootIds = selected.map(root => root.id);
   const rootAliases = roots.roots.filter(root => root.alias).sort((a, b) => a.id.localeCompare(b.id)).map(root => ({ rootId: root.id, alias: root.alias! }));
   const semantic = { documentNamespace, selectedRootIds, rootAliases, nodes,
+    ...(components.length ? { components: components.sort((a, b) => a.id.localeCompare(b.id)) } : {}),
     ...(rootMappings.length ? { rootMappings: [...rootMappings].sort((a, b) => a.rootId.localeCompare(b.rootId)) } : {}) };
   const layout = nodes.some(node => node.layoutMode !== undefined && node.layoutMode !== 'NONE' ||
     node.horizontalSizing === 'HUG' || node.verticalSizing === 'HUG' ||
     ['itemSpacing', 'paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom', 'counterAxisAlignItems', 'layoutAlign'].some(key => key in node));
   const geometry = nodes.some(node => node.clipsContent || node.rotation !== undefined || node.scaleMode === 'CROP' || node.fallback);
   const responsive = nodes.some(node => ['horizontalSizing' , 'verticalSizing', 'horizontalAnchor', 'verticalAnchor', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'].some(key => key in node));
-  return { snapshot: { schemaVersion: { major: 1, minor: rootMappings.length ? 4 : geometry ? 3 : layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
+  const shapeFallback = [...nodes, ...components.flatMap(component => component.mode === 'generate' ? component.nodes : [])].some(node => node.fallback?.feature === 'decorative-shape');
+  return { snapshot: { schemaVersion: { major: 1, minor: shapeFallback ? 6 : components.length ? 5 : rootMappings.length ? 4 : geometry ? 3 : layout ? 2 : responsive ? 1 : 0 }, snapshotId: hash(semantic), ...semantic }, assets, diagnostics };
 }

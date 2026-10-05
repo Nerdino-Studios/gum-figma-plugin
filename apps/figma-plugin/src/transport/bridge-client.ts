@@ -3,6 +3,7 @@ export type Version = { major: 1; minor: 0 };
 export type Workspace = { id: string; label: string; kind: 'sample' | 'existing'; capability: 'native-gum-placeholder'; ready: boolean };
 export type WorkspaceList = { schemaVersion: Version; workspaces: Workspace[] };
 export type Publication = { snapshotId: string; status: 'published' | 'blocked' };
+export type RegisteredControl = { controlId: string; hash: string; width: number; height: number };
 export type Bundle = { snapshot: { snapshotId: string; schemaVersion: Version }; assets: readonly { hash: string; bytes: Uint8Array }[] };
 const endpoint = 'http://localhost:48931';
 function base64(bytes: Uint8Array): string {
@@ -28,6 +29,21 @@ export class BridgeClient {
     if (!isWorkspaceList(value)) throw new Error('Bridge workspace response has an unsupported format.');
     return value;
   }
+  async registeredControls(workspaceId: string): Promise<{ targetHash: string; controls: RegisteredControl[] }> {
+    if (!/^[0-9a-f]{32}$/.test(workspaceId)) throw new Error('Invalid workspace identity.');
+    const response = await this.fetcher(`${endpoint}/v1/component-catalog?workspaceId=${workspaceId}`);
+    if (!response.ok) throw new Error(`Registered component catalog unavailable (${response.status}).`);
+    const value: unknown = await response.json();
+    if (!isRecord(value) || !isVersion(value.schemaVersion) || value.workspaceId !== workspaceId ||
+      !isHash(value.targetHash) || !Array.isArray(value.controls) || value.controls.length > 64 ||
+      !value.controls.every(control => isRecord(control) && Object.keys(control).length === 4 &&
+        typeof control.width === 'number' && Number.isFinite(control.width) && control.width > 0 &&
+        typeof control.height === 'number' && Number.isFinite(control.height) && control.height > 0 &&
+        typeof control.controlId === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(control.controlId) && isHash(control.hash)) ||
+      new Set(value.controls.map(control => control.controlId)).size !== value.controls.length)
+      throw new Error('Invalid registered component catalog.');
+    return { targetHash: value.targetHash, controls: value.controls as RegisteredControl[] };
+  }
   private async publication(path: string, body: unknown): Promise<Record<string, unknown>> {
     const response = await this.fetcher(`${endpoint}/v1/publications/${path}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -52,6 +68,32 @@ export class BridgeClient {
     if (result.snapshotId !== bundle.snapshot.snapshotId || (result.status !== 'published' && result.status !== 'blocked')) throw new Error('Unexpected finalization identity; publication not confirmed.');
     return { snapshotId: result.snapshotId, status: result.status };
   }
+  async run(workspaceId: string, snapshotId: string): Promise<{ runtimeId: string; targetHash: string; outputHash: string; status: 'running' }> {
+    if (!/^[0-9a-f]{32}$/.test(workspaceId) || !isHash(snapshotId)) throw new Error('Invalid runtime identity.');
+    const targetResponse = await this.fetcher(`${endpoint}/v1/runtime-target?workspaceId=${workspaceId}`);
+    if (!targetResponse.ok) throw new Error(`FRB2 target unavailable (${targetResponse.status}); choose a registered Sample workspace.`);
+    const target: unknown = await targetResponse.json();
+    if (!isRecord(target) || !isVersion(target.schemaVersion) || target.workspaceId !== workspaceId || !isHash(target.targetHash))
+      throw new Error('Invalid runtime target identity.');
+    const response = await this.fetcher(`${endpoint}/v1/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schemaVersion: { major: 1, minor: 0 }, workspaceId, snapshotId, targetHash: target.targetHash }) });
+    if (!response.ok) {
+      if (response.status === 409) {
+        let failure: unknown;
+        try { failure = await response.json(); } catch { /* Unstructured failures remain bounded. */ }
+        if (isRecord(failure) && typeof failure.code === 'string' && /^[A-Z][A-Z0-9_]{0,39}$/.test(failure.code) &&
+            typeof failure.stage === 'string' && failure.stage.length <= 80 && typeof failure.details === 'string' && failure.details.length <= 2200)
+          throw new Error(`${failure.code} at ${failure.stage}: ${failure.details}`);
+      }
+      throw new Error(`FRB2 launch failed (${response.status}); the published snapshot or target may have changed.`);
+    }
+    const receipt: unknown = await response.json();
+    if (!isRecord(receipt) || Object.keys(receipt).sort().join(',') !== 'outputHash,runtimeId,schemaVersion,snapshotId,status,targetHash,workspaceId' ||
+        !isVersion(receipt.schemaVersion) || receipt.workspaceId !== workspaceId || receipt.snapshotId !== snapshotId || receipt.targetHash !== target.targetHash ||
+        !isHash(receipt.outputHash) || typeof receipt.runtimeId !== 'string' || !/^[0-9a-f]{32}$/.test(receipt.runtimeId) || receipt.status !== 'running')
+      throw new Error('Mismatched runtime provenance.');
+    return { runtimeId: receipt.runtimeId, targetHash: receipt.targetHash as string, outputHash: receipt.outputHash, status: 'running' };
+  }
   async preview(workspaceId: string, snapshotId: string): Promise<{ targetHash: string; outputHash: string; artifactId: string; png: Uint8Array }> {
     if (!/^[0-9a-f]{32}$/.test(workspaceId) || !/^sha256:[0-9a-f]{64}$/.test(snapshotId)) throw new Error('Invalid preview identity.');
     const targetResponse = await this.fetcher(`${endpoint}/v1/preview-target?workspaceId=${workspaceId}`);
@@ -67,7 +109,7 @@ export class BridgeClient {
       if (response.status === 409) {
         let failure: unknown;
         try { failure = await response.json(); } catch { /* Older hosts have no structured body. */ }
-        if (isRecord(failure) && typeof failure.code === 'string' && /^[A-Z_]{1,40}$/.test(failure.code) &&
+        if (isRecord(failure) && typeof failure.code === 'string' && /^[A-Z][A-Z0-9_]{0,39}$/.test(failure.code) &&
           typeof failure.stage === 'string' && failure.stage.length <= 80 &&
           typeof failure.details === 'string' && failure.details.length <= 2200) {
           throw new Error(`Preview failed (${response.status}) ${failure.code} at ${failure.stage}: ${failure.details}`);

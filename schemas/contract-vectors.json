@@ -923,5 +923,249 @@
   { "name": "unverified control mapping", "kind": "snapshot", "valid": false,
     "value": { "schemaVersion": { "major": 1, "minor": 4 }, "snapshotId": "fixture", "documentNamespace": "ns",
       "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
-      "rootMappings": [{ "rootId": "root", "mode": "generate", "catalogId": "gumbridge.builtin", "revision": "1.0", "controlId": "forms.button" }], "nodes": [] } }
+      "rootMappings": [{ "rootId": "root", "mode": "generate", "catalogId": "gumbridge.builtin", "revision": "1.0", "controlId": "forms.button" }], "nodes": [] } },
+  { "name": "v1.5 shared component instance", "kind": "snapshot", "valid": true,
+    "value": { "schemaVersion": { "major": 1, "minor": 5 }, "snapshotId": "fixture", "documentNamespace": "ns",
+      "selectedRootIds": ["root"], "rootAliases": [{ "rootId": "root", "alias": "Main" }],
+      "components": [{ "id": "button", "alias": "Shared", "mode": "generate", "nodes": [{ "id": "button", "parentId": null, "type": "FRAME", "name": "Button", "x": 0, "y": 0, "width": 20, "height": 10, "visible": true, "layoutMode": "NONE", "clipsContent": false }] }],
+      "nodes": [{ "id": "root", "parentId": null, "type": "FRAME", "name": "Root", "x": 0, "y": 0, "width": 50, "height": 50, "visible": true, "layoutMode": "NONE", "clipsContent": false },
+        { "id": "instance", "parentId": "root", "type": "INSTANCE", "name": "Instance", "componentId": "button", "x": 1, "y": 2, "width": 20, "height": 10, "visible": true }] } },
+  { "name": "old snapshot cannot contain components", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 4 }, "snapshotId": "fixture", "documentNamespace": "ns", "selectedRootIds": [], "rootAliases": [],
+      "components": [], "nodes": [] } },
+  { "name": "v1.5 referenced component omits workspace hash", "kind": "snapshot", "valid": true,
+    "value": { "schemaVersion": { "major": 1, "minor": 5 }, "snapshotId": "fixture", "documentNamespace": "ns", "selectedRootIds": [], "rootAliases": [],
+      "components": [{ "id": "button", "alias": "ExistingButton", "mode": "reference", "controlId": "ExistingButton", "width": 100, "height": 40 }], "nodes": [] } },
+  { "name": "v1.5 reference cannot smuggle target hash into design", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 5 }, "snapshotId": "fixture", "documentNamespace": "ns", "selectedRootIds": [], "rootAliases": [],
+      "components": [{ "id": "button", "alias": "ExistingButton", "mode": "reference", "controlId": "ExistingButton", "width": 100, "height": 40, "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }], "nodes": [] } },
+  { "name": "instance child override is not exposed", "kind": "snapshot", "valid": false,
+    "value": { "schemaVersion": { "major": 1, "minor": 5 }, "snapshotId": "fixture", "documentNamespace": "ns", "selectedRootIds": [], "rootAliases": [],
+      "nodes": [{ "id": "instance", "parentId": null, "type": "INSTANCE", "name": "Instance", "componentId": "button", "x": 0, "y": 0, "width": 20, "height": 10, "visible": true, "overrides": { "Text": "unsafe" } }] } }
+,
+{
+  "name": "decorative-shape-fallback-v1.6",
+  "kind": "snapshot",
+  "valid": true,
+  "value": {
+    "schemaVersion": {
+      "major": 1,
+      "minor": 6
+    },
+    "snapshotId": "fixture",
+    "documentNamespace": "ns",
+    "selectedRootIds": [
+      "root"
+    ],
+    "rootAliases": [
+      {
+        "rootId": "root",
+        "alias": "Main"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "image",
+        "parentId": "root",
+        "type": "IMAGE",
+        "name": "Decoration",
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "visible": true,
+        "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "scaleMode": "FIT",
+        "fallback": {
+          "feature": "decorative-shape",
+          "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    ]
+  }
+}
+,
+{
+  "name": "decorative-shape-fallback-before-v1.6",
+  "kind": "snapshot",
+  "valid": false,
+  "value": {
+    "schemaVersion": {
+      "major": 1,
+      "minor": 5
+    },
+    "snapshotId": "fixture",
+    "documentNamespace": "ns",
+    "selectedRootIds": [
+      "root"
+    ],
+    "rootAliases": [
+      {
+        "rootId": "root",
+        "alias": "Main"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "image",
+        "parentId": "root",
+        "type": "IMAGE",
+        "name": "Decoration",
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "visible": true,
+        "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "scaleMode": "FIT",
+        "fallback": {
+          "feature": "decorative-shape",
+          "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    ]
+  }
+}
+,
+{
+  "name": "generated-component-shape-fallback-v1.6",
+  "kind": "snapshot",
+  "valid": true,
+  "value": {
+    "schemaVersion": {
+      "major": 1,
+      "minor": 6
+    },
+    "snapshotId": "fixture",
+    "documentNamespace": "ns",
+    "selectedRootIds": [
+      "root"
+    ],
+    "rootAliases": [
+      {
+        "rootId": "root",
+        "alias": "Main"
+      }
+    ],
+    "nodes": [],
+    "components": [
+      {
+        "id": "component",
+        "alias": "Panel",
+        "mode": "generate",
+        "nodes": [
+          {
+            "id": "image",
+            "parentId": "root",
+            "type": "IMAGE",
+            "name": "Decoration",
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1,
+            "visible": true,
+            "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "scaleMode": "FIT",
+            "fallback": {
+              "feature": "decorative-shape",
+              "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+,
+{
+  "name": "generated-component-shape-fallback-before-v1.6",
+  "kind": "snapshot",
+  "valid": false,
+  "value": {
+    "schemaVersion": {
+      "major": 1,
+      "minor": 5
+    },
+    "snapshotId": "fixture",
+    "documentNamespace": "ns",
+    "selectedRootIds": [
+      "root"
+    ],
+    "rootAliases": [
+      {
+        "rootId": "root",
+        "alias": "Main"
+      }
+    ],
+    "nodes": [],
+    "components": [
+      {
+        "id": "component",
+        "alias": "Panel",
+        "mode": "generate",
+        "nodes": [
+          {
+            "id": "image",
+            "parentId": "root",
+            "type": "IMAGE",
+            "name": "Decoration",
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 1,
+            "visible": true,
+            "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "scaleMode": "FIT",
+            "fallback": {
+              "feature": "decorative-shape",
+              "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+,
+{
+  "name": "unknown-fallback-feature",
+  "kind": "snapshot",
+  "valid": false,
+  "value": {
+    "schemaVersion": {
+      "major": 1,
+      "minor": 6
+    },
+    "snapshotId": "fixture",
+    "documentNamespace": "ns",
+    "selectedRootIds": [
+      "root"
+    ],
+    "rootAliases": [
+      {
+        "rootId": "root",
+        "alias": "Main"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "image",
+        "parentId": "root",
+        "type": "IMAGE",
+        "name": "Decoration",
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "visible": true,
+        "imageHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "scaleMode": "FIT",
+        "fallback": {
+          "feature": "unknown-shape",
+          "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    ]
+  }
+}
 ]

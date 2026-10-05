@@ -1,7 +1,7 @@
 import catalog from './builtin-v1.json' with { type: 'json' };
 
 export const builtinCatalog = catalog;
-export type Mapping = { nodeId: string; alias: string; mode: 'generate' | 'reference'; catalogId: string; revision: string; controlId: string };
+export type Mapping = { nodeId: string; alias: string; mode: 'generate' | 'reference'; catalogId: string; revision: string; controlId: string; pageId?: string };
 type Root = { getPluginData(key: string): string; setPluginData(key: string, value: string): void };
 const key = 'gumbridge.mappings.v1';
 const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -17,13 +17,15 @@ function parse(root: Root): { version: number; namespace: string; entries: Mappi
   try { value = JSON.parse(raw); } catch { throw new Error('AMBIGUOUS_MAPPING: corrupt document mapping metadata'); }
   if (!own(value) || Object.keys(value).sort().join(',') !== 'entries,namespace,version' || value.version !== 1 ||
     typeof value.namespace !== 'string' || !namespaceId.test(value.namespace) || !Array.isArray(value.entries) || value.entries.length > 64 ||
-    !value.entries.every(entry => own(entry) && Object.keys(entry).sort().join(',') === 'alias,catalogId,controlId,mode,nodeId,revision' &&
+    !value.entries.every(entry => own(entry) && ['alias,catalogId,controlId,mode,nodeId,revision', 'alias,catalogId,controlId,mode,nodeId,pageId,revision'].includes(Object.keys(entry).sort().join(',')) &&
+      (entry.pageId === undefined || typeof entry.pageId === 'string' && sourceId.test(entry.pageId) && entry.mode === 'generate' && entry.controlId === 'native.frame') &&
       typeof entry.nodeId === 'string' && sourceId.test(entry.nodeId) && typeof entry.alias === 'string' && identifier.test(entry.alias) &&
       (entry.mode === 'generate' || entry.mode === 'reference') && ['catalogId', 'controlId', 'revision'].every(k => typeof entry[k] === 'string' && entry[k].length > 0 && entry[k].length <= 100)))
     throw new Error('AMBIGUOUS_MAPPING: invalid document mapping metadata');
   const entries = value.entries as Mapping[];
   if (new Set(entries.map(e => e.nodeId)).size !== entries.length ||
-    new Set(entries.map(e => e.alias.toLowerCase())).size !== entries.length)
+    new Set(entries.map(e => e.alias.toLowerCase())).size !== entries.length ||
+    new Set(entries.filter(e => e.pageId).map(e => e.pageId)).size !== entries.filter(e => e.pageId).length)
     throw new Error('AMBIGUOUS_MAPPING: duplicate source or case-insensitive alias');
   return { version: 1, namespace: value.namespace, entries };
 }
@@ -40,7 +42,8 @@ export function saveMapping(root: Root, namespace: string, nodeId: string, mappi
   const existing = loadMappings(root, namespace);
   if (existing.some(entry => entry.nodeId !== nodeId && entry.alias.toLowerCase() === mapping.alias.toLowerCase()))
     throw new Error('ALIAS_COLLISION: another source already owns this public alias');
-  const entry = { ...mapping, nodeId };
+  const pageId = mapping.pageId ?? existing.find(item => item.nodeId === nodeId)?.pageId;
+  const entry = { ...mapping, nodeId, ...(pageId ? { pageId } : {}) };
   const candidate = { version: 1, namespace, entries: [...existing.filter(item => item.nodeId !== nodeId), entry].sort((a, b) => a.nodeId.localeCompare(b.nodeId)) };
   // Verify the same bounded representation before writing; no credentials or design assets belong here.
   const raw = JSON.stringify(candidate);

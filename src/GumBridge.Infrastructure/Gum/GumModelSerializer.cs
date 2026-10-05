@@ -11,16 +11,20 @@ public static class GumModelSerializer
     private static readonly XNamespace Xsi = "http://www.w3.org/2001/XMLSchema-instance";
     private static readonly XNamespace Xsd = "http://www.w3.org/2001/XMLSchema";
 
-    public static string Serialize(GumScreen screen)
+    public static string Serialize(GumScreen screen) => SerializeElement("ScreenSave", screen.Name, screen.Elements);
+
+    public static string SerializeComponent(GumComponent component) => SerializeElement("ComponentSave", component.Name, component.Elements);
+
+    private static string SerializeElement(string kind, string name, IReadOnlyList<GumElement> elements)
     {
-        if (string.IsNullOrWhiteSpace(screen.Name)) throw new ArgumentException("Screen name required", nameof(screen));
+        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Element name required", nameof(name));
         var state = new XElement("State", new XElement("Name", "Default"));
-        var root = new XElement("ScreenSave", new XAttribute(XNamespace.Xmlns + "xsd", Xsd), new XAttribute(XNamespace.Xmlns + "xsi", Xsi),
-            new XElement("Name", screen.Name), state);
+        var root = new XElement(kind, new XAttribute(XNamespace.Xmlns + "xsd", Xsd), new XAttribute(XNamespace.Xmlns + "xsi", Xsi),
+            new XElement("Name", name), kind == "ComponentSave" ? new XElement("BaseType", "Container") : null, state);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var element in screen.Elements)
+        foreach (var element in elements)
         {
-            if (!seen.Add(element.Name)) throw new ArgumentException("Duplicate Gum element name", nameof(screen));
+            if (!seen.Add(element.Name)) throw new ArgumentException("Duplicate Gum element name", nameof(elements));
             foreach (var value in element.Values)
                 AddVariable(state, element.Name + "." + value.Name, value.Type, value.Value);
             if (element.Parent is not null) AddVariable(state, element.Name + ".Parent", "string", element.Parent);

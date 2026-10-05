@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -11,6 +12,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using System.Xml;
 using GumBridge.Conversion;
 using GumBridge.Infrastructure.Gum;
 using GumBridge.Infrastructure.Storage;
@@ -18,6 +20,8 @@ using GumBridge.Infrastructure.Storage;
 namespace GumBridge.Host;
 
 // Preview-only operation: copies a trusted sample into disposable staging and never opens a target for writing.
+public sealed record RegisteredComponent(string Hash, double Width, double Height);
+
 public sealed class PreviewOperation
 {
     private readonly PublicationStore publications;
@@ -45,14 +49,28 @@ public sealed class PreviewOperation
     }
     public async Task<(string artifactId, string outputHash, string targetHash)> CreateAsync(WorkspaceEntry entry, string snapshotId, string expectedTargetHash)
     {
+        using var prepared = await PrepareAsync(entry, snapshotId, expectedTargetHash);
+        var png = Path.Combine(prepared.Stage, "result.png");
+        await toolRunner(prepared.Stage, ["screenshot", prepared.GumProject, prepared.ScreenName, "--output", png,
+            "--width", prepared.Width.ToString(), "--height", prepared.Height.ToString(), "--backend", "monogame"]);
+        if (TargetHash(entry) != prepared.TargetHash) throw new InvalidOperationException("STALE_TARGET");
+        var artifactId = artifacts.Create(entry.id, snapshotId, prepared.TargetHash, File.ReadAllBytes(png));
+        return (artifactId, artifacts.OutputHash(entry.id, snapshotId, prepared.TargetHash, artifactId), prepared.TargetHash);
+    }
+    public async Task<PreparedDesign> PrepareAsync(WorkspaceEntry entry, string snapshotId, string expectedTargetHash)
+    {
         var target = TargetHash(entry);
         if (target != expectedTargetHash) throw new InvalidOperationException("STALE_TARGET");
         using var document = publications.ReadPublished(entry.id, snapshotId);
         var snapshot = document.RootElement;
+        if (snapshot.TryGetProperty("extractionDiagnostics", out _))
+            throw new InvalidOperationException("UNSUPPORTED_FEATURE: blocked extraction cannot be previewed");
         var sizes = new Dictionary<string, (double Width, double Height)>();
         var blobs = new Dictionary<string, byte[]>();
         long decodedPixels = 0;
-        foreach (var node in snapshot.GetProperty("nodes").EnumerateArray())
+        var designNodes = snapshot.GetProperty("nodes").EnumerateArray().Concat(snapshot.TryGetProperty("components", out var definitions) ?
+            definitions.EnumerateArray().Where(c => c.GetProperty("mode").GetString() == "generate").SelectMany(c => c.GetProperty("nodes").EnumerateArray()) : []).ToArray();
+        foreach (var node in designNodes)
             if (node.TryGetProperty("imageHash", out var image))
             {
                 var hash = image.GetString()!;
@@ -68,7 +86,7 @@ public sealed class PreviewOperation
                 }
             }
         var fonts = ReadFontMappings(entry);
-        foreach (var node in snapshot.GetProperty("nodes").EnumerateArray())
+        foreach (var node in designNodes)
             if (node.GetProperty("type").GetString() == "TEXT")
             {
                 var key = new FontKey(node.GetProperty("fontFamily").GetString()!, node.GetProperty("fontStyle").GetString()!,
@@ -77,8 +95,14 @@ public sealed class PreviewOperation
                     FontAssetValidator.Validate(Path.Combine(Path.GetDirectoryName(Path.Combine(entry.root, entry.gumx))!, font.Path),
                         node.GetProperty("characters").GetString(), key.Size);
             }
-        var converted =  MinimalConverter.Convert(snapshot, sizes, fonts);
-        if (converted.Diagnostics.Count > 0 || converted.Screens.Count != 1) throw new InvalidOperationException("VALIDATION_FAILED: " + string.Join(';', converted.Diagnostics.Select(d => d.Code)));
+        // Referenced components are developer-owned. Resolve only registered on-disk
+        // controls; target content hashes are target-profile inputs, not snapshot data.
+        var registeredReferences = ResolveReferenceContracts(entry, snapshot);
+        var trustedReferences = registeredReferences.ToDictionary(p => p.Key, p => p.Value.Hash, StringComparer.Ordinal);
+        var trustedDimensions = registeredReferences.ToDictionary(p => p.Key, p => (p.Value.Width, p.Value.Height), StringComparer.Ordinal);
+        var converted = MinimalConverter.Convert(snapshot, sizes, fonts, trustedReferences, trustedDimensions);
+        if (converted.Diagnostics.Count > 0 || converted.Screens.Count == 0 || converted.Screens.Count > 16)
+            throw new InvalidOperationException("VALIDATION_FAILED: " + string.Join(';', converted.Diagnostics.Select(d => d.Code)));
         var screen = converted.Screens[0];
         var root = snapshot.GetProperty("nodes")[0];
         var width = (int)root.GetProperty("width").GetDouble();
@@ -107,11 +131,22 @@ public sealed class PreviewOperation
             if (project.Root?.Element("FontGenerator")?.Value != "KernSmith") throw new InvalidOperationException("TOOLCHAIN_MISMATCH: expected KernSmith");
             var references = project.Root!.Elements("ScreenReference").ToArray();
             foreach (var reference in references) reference.Remove();
-            project.Root.Add(new XElement("ScreenReference", new XAttribute("Name", screen.Name)));
+            foreach (var item in converted.Screens)
+                project.Root.Add(new XElement("ScreenReference", new XAttribute("Name", item.Name)));
+            var components = Path.Combine(Path.GetDirectoryName(gumx)!, "Components");
+            Directory.CreateDirectory(components);
+            foreach (var component in converted.Components)
+            {
+                var path = Path.Combine(components, component.Name + ".gucx");
+                if (File.Exists(path)) throw new InvalidOperationException("OWNERSHIP_CONFLICT: existing component path in staged target");
+                project.Root.Add(new XElement("ComponentReference", new XAttribute("Name", component.Name)));
+                File.WriteAllText(path, GumModelSerializer.SerializeComponent(component));
+            }
             project.Save(gumx);
             var screens = Path.Combine(Path.GetDirectoryName(gumx)!, "Screens");
             Directory.CreateDirectory(screens);
-            File.WriteAllText(Path.Combine(screens, screen.Name + ".gusx"), GumModelSerializer.Serialize(screen));
+            foreach (var item in converted.Screens)
+                File.WriteAllText(Path.Combine(screens, item.Name + ".gusx"), GumModelSerializer.Serialize(item));
             foreach (var (hash, bytes) in blobs)
             {
                 var path = Path.Combine(Path.GetDirectoryName(gumx)!, "Assets", "Images", hash[7..] + ".png");
@@ -120,19 +155,94 @@ public sealed class PreviewOperation
             }
             await toolRunner(stage, ["check", gumx]);
             await toolRunner(stage, ["fonts", gumx]);
-            if (snapshot.GetProperty("nodes").EnumerateArray().Any(node => node.GetProperty("type").GetString() == "TEXT" &&
+            if (designNodes.Any(node => node.GetProperty("type").GetString() == "TEXT" &&
                 node.GetProperty("fontFamily").GetString() == "Arial" && node.GetProperty("fontStyle").GetString() == "Regular" &&
                 node.GetProperty("fontSize").GetDouble() == 24 && !fonts.ContainsKey(new FontKey("Arial", "Regular", 24))) &&
                 !File.Exists(Path.Combine(Path.GetDirectoryName(gumx)!, "FontCache", "Font24Arial.fnt"))) throw new InvalidOperationException("MISSING_FONT");
             await toolRunner(stage, ["codegen", gumx]);
-            var png = Path.Combine(stage, "result.png");
-            await toolRunner(stage, ["screenshot", gumx, screen.Name, "--output", png, "--width", width.ToString(), "--height", height.ToString(), "--backend", "monogame"]);
             if (TargetHash(entry) != target) throw new InvalidOperationException("STALE_TARGET");
-            var artifactId = artifacts.Create(entry.id, snapshotId, target, File.ReadAllBytes(png));
-            return (artifactId, artifacts.OutputHash(entry.id, snapshotId, target, artifactId), target);
+            using var output = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var nativeRoot = Path.GetDirectoryName(gumx)!;
+            foreach (var file in Directory.GetFiles(nativeRoot, "*", SearchOption.AllDirectories).OrderBy(file => Path.GetRelativePath(nativeRoot, file), StringComparer.Ordinal))
+            {
+                output.AppendData(Encoding.UTF8.GetBytes(Path.GetRelativePath(nativeRoot, file).Replace('\\', '/') + "\0"));
+                output.AppendData(File.ReadAllBytes(file));
+            }
+            return new PreparedDesign(stage, gumx, screen.Name, width, height, converted.Screens.Count, snapshotId, target,
+                "sha256:" + Convert.ToHexStringLower(output.GetHashAndReset()));
         }
-        finally { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+        catch { if (Directory.Exists(stage)) Directory.Delete(stage, true); throw; }
     }
+    public static IReadOnlyDictionary<string, RegisteredComponent> ListRegisteredReferences(WorkspaceEntry entry)
+    {
+        if (entry.kind != "sample") throw new ArgumentException("Reference catalog requires Sample workspace");
+        var gumx = Path.GetFullPath(Path.Combine(entry.root, entry.gumx));
+        using var reader = XmlReader.Create(gumx, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
+        var project = XDocument.Load(reader);
+        var directory = Path.Combine(Path.GetDirectoryName(gumx)!, "Components");
+        var result = new Dictionary<string, RegisteredComponent>(StringComparer.Ordinal);
+        foreach (var reference in project.Root!.Elements("ComponentReference"))
+        {
+            var name = (string?)reference.Attribute("Name");
+            if (name is null || !Regex.IsMatch(name, "^[A-Za-z][A-Za-z0-9_]*$") || result.Count >= 64 || !Directory.Exists(directory) ||
+                (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) continue;
+            var path = Path.Combine(directory, name + ".gucx");
+            if (!File.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length > 1024 * 1024) continue;
+            var dimensions = ReadAbsoluteDimensions(path, name);
+            if (dimensions is null) continue;
+            result.TryAdd(name, new RegisteredComponent("sha256:" + Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))),
+                dimensions.Value.Width, dimensions.Value.Height));
+        }
+        return result;
+    }
+
+    private static (double Width, double Height)? ReadAbsoluteDimensions(string path, string name)
+    {
+        try
+        {
+            using var reader = XmlReader.Create(path, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
+            var component = XDocument.Load(reader).Root;
+            if (component?.Name != "ComponentSave" || (string?)component.Element("Name") != name ||
+                (string?)component.Element("BaseType") != "Container") return null;
+            var state = component.Elements("State").SingleOrDefault(s => (string?)s.Element("Name") == "Default");
+            if (state is null) return null;
+            double? Dimension(string axis)
+            {
+                var value = state.Elements("Variable").SingleOrDefault(v => (string?)v.Attribute("Name") == axis);
+                var unit = state.Elements("Variable").SingleOrDefault(v => (string?)v.Attribute("Name") == axis + "Units");
+                if ((string?)value?.Attribute("Type") != "float" || (string?)value?.Attribute("SetsValue") != "true" ||
+                    (string?)unit?.Element("Value") != "0" || (string?)unit?.Attribute("SetsValue") != "true" ||
+                    !double.TryParse((string?)value?.Element("Value"), NumberStyles.Float, CultureInfo.InvariantCulture, out var n) ||
+                    !double.IsFinite(n) || n <= 0 || n > float.MaxValue) return null;
+                return n;
+            }
+            var width = Dimension("Width"); var height = Dimension("Height");
+            return width is not null && height is not null ? (width.Value, height.Value) : null;
+        }
+        catch (Exception e) when (e is XmlException or InvalidOperationException or IOException) { return null; }
+    }
+
+    public static IReadOnlyDictionary<string, string> ResolveReferenceHashes(WorkspaceEntry entry, JsonElement snapshot) =>
+        ResolveReferenceContracts(entry, snapshot).ToDictionary(p => p.Key, p => p.Value.Hash, StringComparer.Ordinal);
+
+    public static IReadOnlyDictionary<string, RegisteredComponent> ResolveReferenceContracts(WorkspaceEntry entry, JsonElement snapshot)
+    {
+        var hashes = new Dictionary<string, RegisteredComponent>(StringComparer.Ordinal);
+        if (!snapshot.TryGetProperty("components", out var definitions)) return hashes;
+        var registered = ListRegisteredReferences(entry);
+        foreach (var component in definitions.EnumerateArray().Where(c => c.GetProperty("mode").GetString() == "reference"))
+        {
+            var alias = component.GetProperty("alias").GetString()!;
+            var controlId = component.GetProperty("controlId").GetString()!;
+            // v1.5 only permits the registered native component's own name, not a
+            // Figma-supplied path, arbitrary adapter ID or implicit target association.
+            if (controlId != alias || !registered.TryGetValue(alias, out var hash))
+                throw new InvalidOperationException("UNRESOLVED_COMPONENT: reference is not registered in the target project");
+            hashes.Add(controlId, hash);
+        }
+        return hashes;
+    }
+
     // Explicit workspace-local licensed bitmap fonts; .fnt + PNG pages are copied into staging with the sample.
     // Font mappings and all asset bytes participate in TargetHash. Never resolve a Figma-supplied path.
     public static IReadOnlyDictionary<FontKey, FontAsset> ReadFontMappings(WorkspaceEntry entry)
@@ -218,7 +328,7 @@ public sealed class PreviewOperation
     public static string ErrorCode(string message)
     {
         var prefix = message.Split(':', 2)[0];
-        return Regex.IsMatch(prefix, "^[A-Z_]{1,40}$") ? prefix : "VALIDATION_FAILED";
+        return Regex.IsMatch(prefix, "^[A-Z][A-Z0-9_]{0,39}$") ? prefix : "VALIDATION_FAILED";
     }
     public static PreviewToolFailure ToolFailure(string step, string stdout, string stderr)
     {
@@ -273,4 +383,10 @@ public sealed class PreviewToolFailure : InvalidOperationException
         Stage = stage;
         Details = details;
     }
+}
+
+public sealed record PreparedDesign(string Stage, string GumProject, string ScreenName, int Width, int Height,
+    int ScreenCount, string SnapshotId, string TargetHash, string OutputHash) : IDisposable
+{
+    public void Dispose() { if (Directory.Exists(Stage)) Directory.Delete(Stage, true); }
 }
