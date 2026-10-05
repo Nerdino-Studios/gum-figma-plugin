@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../GumBridge.Contracts/GumBridge.Contracts.csproj" />
+    <ProjectReference Include="../GumBridge.Conversion/GumBridge.Conversion.csproj" />
     <ProjectReference Include="../GumBridge.Application/GumBridge.Application.csproj" />
   </ItemGroup>
 </Project>

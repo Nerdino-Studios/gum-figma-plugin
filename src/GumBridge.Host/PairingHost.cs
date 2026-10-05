@@ -1,10 +1,10 @@
 using System;
-using System.Collections.Concurrent;
 using System.Linq;
 using System.IO;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -13,6 +13,8 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using GumBridge.Infrastructure.Storage;
+using GumBridge.Infrastructure.Gum;
 
 namespace GumBridge.Host;
 
@@ -21,15 +23,19 @@ public sealed class PairingHost : IAsyncDisposable
 {
     private readonly WebApplication app;
     private readonly WorkspaceStore workspaceStore;
+    private readonly PublicationStore publicationStore;
+    private readonly PreviewStore previewStore;
+    private readonly PreviewOperation previewOperation;
+    private readonly RuntimeOperation runtimeOperation;
     private readonly object mutationLock = new();
+    private readonly System.Threading.SemaphoreSlim previewLock = new(1, 1);
     private readonly string dataDirectory;
     private readonly string cliToken;
     private readonly FileStream ownershipLock;
     private readonly Func<DateTimeOffset> utcNow;
-    private readonly ConcurrentDictionary<string, DateTimeOffset> challenges = new();
-    private readonly ConcurrentDictionary<string, byte> sessions = new();
     public string Address { get; private set; } = "";
-    private PairingHost(WebApplication app, Func<DateTimeOffset> utcNow, string dataDirectory, FileStream ownershipLock)
+    private PairingHost(WebApplication app, Func<DateTimeOffset> utcNow, string dataDirectory, FileStream ownershipLock, Func<string, string[], Task>? previewToolRunner,
+        Func<PreparedDesign, Task<IRuntimeSession>>? runtimeLauncher)
     {
         this.app = app;
         this.utcNow = utcNow;
@@ -37,18 +43,14 @@ public sealed class PairingHost : IAsyncDisposable
         this.ownershipLock = ownershipLock;
         cliToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         workspaceStore = new WorkspaceStore(dataDirectory);
+        publicationStore = new PublicationStore(dataDirectory, utcNow);
+        previewStore = new PreviewStore(dataDirectory);
+        previewOperation = new PreviewOperation(publicationStore, previewStore, previewToolRunner);
+        runtimeOperation = new RuntimeOperation(previewOperation, runtimeLauncher);
     }
 
-    // Only the local console path calls this method in production; never expose it as HTTP.
-    public string IssueChallengeForLocalConsent()
-    {
-        foreach (var item in challenges.Where(item => item.Value <= utcNow())) challenges.TryRemove(item.Key, out _);
-        var challenge = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        challenges[challenge] = utcNow().AddMinutes(2);
-        return challenge;
-    }
-
-    public static async Task<PairingHost> StartAsync(int port = 48931, Func<DateTimeOffset>? utcNow = null, string? localDataDirectory = null)
+    public static async Task<PairingHost> StartAsync(int port = 48931, Func<DateTimeOffset>? utcNow = null, string? localDataDirectory = null, Func<string, string[], Task>? previewToolRunner = null,
+        Func<PreparedDesign, Task<IRuntimeSession>>? runtimeLauncher = null)
     {
         var data = localDataDirectory ?? WorkspaceCli.DefaultDataDirectory;
         if (Path.Exists(data) && (File.GetAttributes(data) & FileAttributes.ReparsePoint) != 0) throw new IOException("Local data directory must not be linked");
@@ -60,10 +62,10 @@ public sealed class PairingHost : IAsyncDisposable
         // Exclusive lock denies a second host, even if its requested port differs.
         var ownershipLock = new FileStream(Path.Combine(data, "host.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         var builder = WebApplication.CreateSlimBuilder();
-        builder.Logging.ClearProviders(); // Requests, challenge bodies and tokens must not enter normal logs.
-        builder.WebHost.UseKestrel(options => { options.Limits.MaxRequestBodySize = 1024; options.Listen(IPAddress.Loopback, port); });
+        builder.Logging.ClearProviders(); // Local request bodies and CLI credentials must not enter normal logs.
+        builder.WebHost.UseKestrel(options => { options.Limits.MaxRequestBodySize = 6 * 1024 * 1024; options.Listen(IPAddress.Loopback, port); });
         var app = builder.Build();
-        var host = new PairingHost(app, utcNow ?? (() => DateTimeOffset.UtcNow), data, ownershipLock);
+        var host = new PairingHost(app, utcNow ?? (() => DateTimeOffset.UtcNow), data, ownershipLock, previewToolRunner, runtimeLauncher);
         app.Use(async (context, next) =>
         {
             var request = context.Request;
@@ -78,6 +80,13 @@ public sealed class PairingHost : IAsyncDisposable
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;
             }
+            var path = request.Path.Value;
+            var methodName = request.Method;
+            var pluginRoute = (methodName == "GET" && path is "/v1/workspaces" or "/v1/publications" or "/v1/preview-target" or "/v1/artifacts" or "/v1/component-catalog" or "/v1/runtime-target") ||
+                (methodName == "POST" && path is "/v1/publications/begin" or "/v1/publications/blobs" or "/v1/publications/finalize" or "/v1/previews" or "/v1/runs");
+            var localRoute = methodName == "POST" && (path is "/v1/local/sample" or "/v1/local/register") && origin.Length == 0;
+            if (origin.Length > 0 && (path is "/v1/local/sample" or "/v1/local/register")) { context.Response.StatusCode = StatusCodes.Status403Forbidden; return; }
+            if (methodName != "OPTIONS" && !pluginRoute && !localRoute) { context.Response.StatusCode = StatusCodes.Status404NotFound; return; }
             if (origin.Length > 0)
             {
                 context.Response.Headers.AccessControlAllowOrigin = origin;
@@ -87,43 +96,121 @@ public sealed class PairingHost : IAsyncDisposable
             {
                 var method = request.Headers.AccessControlRequestMethod.ToString();
                 if (origin.Length == 0 || !((request.Path == "/v1/workspaces" && method == "GET") ||
-                    ((request.Path == "/v1/pair" || request.Path == "/v1/session") && method == "POST")) ||
-                    request.Headers.AccessControlRequestHeaders.ToString().ToLowerInvariant() is not ("authorization" or "content-type" or "content-type,authorization" or "authorization,content-type"))
+                    ((request.Path == "/v1/publications/begin" || request.Path == "/v1/publications/blobs" || request.Path == "/v1/publications/finalize") && method == "POST") ||
+                    (request.Path == "/v1/publications" && method == "GET") ||
+                    (request.Path == "/v1/component-catalog" && method == "GET") ||
+                    (request.Path == "/v1/previews" && method == "POST") ||
+                    (request.Path == "/v1/runs" && method == "POST") ||
+                    (request.Path == "/v1/runtime-target" && method == "GET") ||
+                    (request.Path == "/v1/artifacts" && method == "GET") ||
+                    (request.Path == "/v1/preview-target" && method == "GET")) ||
+                    request.Headers.AccessControlRequestHeaders.ToString().ToLowerInvariant() is not ("" or "content-type"))
                 {
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
                     return;
                 }
                 context.Response.Headers.AccessControlAllowMethods = "GET, POST";
-                context.Response.Headers.AccessControlAllowHeaders = "Authorization, Content-Type";
+                context.Response.Headers.AccessControlAllowHeaders = "Content-Type";
                 context.Response.StatusCode = StatusCodes.Status204NoContent;
                 return;
             }
             await next(context);
         });
-        app.MapPost("/v1/pair", async (HttpContext context) =>
-        {
-            if (context.Request.ContentLength is > 1024) return Results.StatusCode(413);
-            PairRequest? payload;
-            try { payload = await context.Request.ReadFromJsonAsync<PairRequest>(); }
-            catch (JsonException) { return Results.BadRequest(); }
-            if (payload?.challenge is not { Length: 64 } value ||
-                !host.challenges.TryRemove(value, out var expires) || expires <= host.utcNow())
-                return Results.Unauthorized();
-            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-            host.sessions[token] = 0;
-            return Results.Json(new SessionResponse(token, new SchemaVersion(1, 0)));
-        });
         app.MapGet("/v1/workspaces", (HttpContext context) =>
-            host.Authenticated(context) ? Results.Json(new WorkspacesResponse(new SchemaVersion(1, 0), host.workspaceStore.List())) : Results.Unauthorized());
+            Results.Json(new WorkspacesResponse(new SchemaVersion(1, 0), host.workspaceStore.List())));
+        app.MapGet("/v1/runtime-target", (string workspaceId) =>
+        {
+            if (host.workspaceStore.Find(workspaceId) is not { } entry) return Results.NotFound();
+            try { return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), workspaceId, targetHash = RuntimeOperation.TargetHash(entry) }); }
+            catch (Exception e) when (e is IOException or ArgumentException or InvalidOperationException)
+            { return Results.Conflict(new { code = "FRB2_TARGET_UNAVAILABLE", stage = "runtime target", details = "Use a registered Sample workspace with the bundled FRB2 runtime." }); }
+        });
+        app.MapPost("/v1/runs", async (RuntimeRequest request) =>
+        {
+            if (request.schemaVersion != new SchemaVersion(1, 0) || host.workspaceStore.Find(request.workspaceId) is not { } entry ||
+                request.snapshotId is null || !System.Text.RegularExpressions.Regex.IsMatch(request.snapshotId, "^sha256:[0-9a-f]{64}$") ||
+                request.targetHash is null || !System.Text.RegularExpressions.Regex.IsMatch(request.targetHash, "^sha256:[0-9a-f]{64}$"))
+                return Results.BadRequest(new { code = "INVALID_RUNTIME_REQUEST" });
+            await host.previewLock.WaitAsync();
+            try
+            {
+                var receipt = await host.runtimeOperation.CreateAsync(entry, request.snapshotId, request.targetHash);
+                return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), receipt.runtimeId, receipt.workspaceId,
+                    receipt.snapshotId, receipt.targetHash, receipt.outputHash, receipt.status });
+            }
+            catch (ArgumentException) { return Results.BadRequest(new { code = "INVALID_RUNTIME_REQUEST" }); }
+            catch (Exception e) when (e is IOException or InvalidOperationException)
+            {
+                var failure = PreviewOperation.ToolFailure("runtime", "", e.Message.Replace(entry.root, "[workspace]"));
+                return Results.Conflict(new { code = PreviewOperation.ErrorCode(e.Message), stage = "FRB2 runtime", details = failure.Details });
+            }
+            finally { host.previewLock.Release(); }
+        });
+        app.MapGet("/v1/component-catalog", (string workspaceId) =>
+        {
+            if (host.workspaceStore.Find(workspaceId) is not { } entry || entry.kind != "sample") return Results.NotFound();
+            try
+            {
+                var targetHash = PreviewOperation.TargetHash(entry);
+                var controls = PreviewOperation.ListRegisteredReferences(entry).OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => new { controlId = pair.Key, hash = pair.Value.Hash, width = pair.Value.Width, height = pair.Value.Height }).ToArray();
+                return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), workspaceId, targetHash, controls });
+            }
+            catch (Exception e) when (e is IOException or ArgumentException or System.Xml.XmlException)
+            { return Results.Conflict(new { code = "TOOLCHAIN_MISMATCH" }); }
+        });
         app.MapPost("/v1/local/sample", (HttpContext context, LocalSample request) =>
             host.LocalAuthorized(context) ? host.Mutate(() => host.workspaceStore.Init(request.directory)) : Results.Unauthorized());
         app.MapPost("/v1/local/register", (HttpContext context, LocalRegistration request) =>
             host.LocalAuthorized(context) ? host.Mutate(() => host.workspaceStore.Register(request.directory, request.project, request.gumx)) : Results.Unauthorized());
-        app.MapPost("/v1/session", (HttpContext context) =>
+        app.MapPost("/v1/publications/begin", (HttpContext context, BeginRequest request) => host.Publication(context, request.workspaceId, () =>
         {
-            var token = host.Token(context);
-            if (token is null || !host.sessions.TryRemove(token, out _)) return Results.Unauthorized();
-            return Results.NoContent();
+            var (transferId, missing) = host.publicationStore.Begin(request.workspaceId, request.snapshot);
+            return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), transferId, missing });
+        }, request.schemaVersion));
+        app.MapPost("/v1/publications/blobs", (HttpContext context, BlobRequest request) => host.Publication(context, request.workspaceId, () =>
+        {
+            host.publicationStore.Upload(request.workspaceId, request.transferId, request.hash, request.bytes);
+            return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), accepted = true });
+        }, request.schemaVersion));
+        app.MapPost("/v1/publications/finalize", (HttpContext context, FinalizeRequest request) => host.Publication(context, request.workspaceId, () =>
+        {
+            var (snapshotId, status) = host.publicationStore.Finalize(request.workspaceId, request.transferId);
+            return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshotId, status });
+        }, request.schemaVersion));
+        app.MapGet("/v1/publications", (HttpContext context, string workspaceId) => host.Publication(context, workspaceId, () =>
+            Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshots = host.publicationStore.List(workspaceId) }), new SchemaVersion(1, 0)));
+        app.MapGet("/v1/preview-target", (HttpContext context, string workspaceId) =>
+        {
+            if (host.workspaceStore.Find(workspaceId) is not { } entry) return Results.NotFound();
+            try { return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), workspaceId, targetHash = PreviewOperation.TargetHash(entry) }); }
+            catch (Exception e) when (e is ArgumentException or IOException) { return Results.Conflict(new { code = "TOOLCHAIN_MISMATCH" }); }
+        });
+        app.MapPost("/v1/previews", async (HttpContext context, PreviewRequest request) =>
+        {
+            if (request.schemaVersion != new SchemaVersion(1, 0) || host.workspaceStore.Find(request.workspaceId) is not { } entry) return Results.BadRequest(new { code = "INVALID_PREVIEW_REQUEST" });
+            if (!await host.previewLock.WaitAsync(0)) return Results.StatusCode(429);
+            try
+            {
+                var (artifactId, outputHash, targetHash) = await host.previewOperation.CreateAsync(entry, request.snapshotId, request.targetHash);
+                return Results.Json(new { schemaVersion = new SchemaVersion(1, 0), snapshotId = request.snapshotId, workspaceId = entry.id, targetHash, outputHash, artifactId });
+            }
+            catch (ArgumentException) { return Results.BadRequest(new { code = "INVALID_PREVIEW_REQUEST" }); }
+            catch (PreviewToolFailure e) { return Results.Conflict(new { code = e.Code, stage = e.Stage, details = e.Details }); }
+            catch (InvalidOperationException e) { return Results.Conflict(new { code = PreviewOperation.ErrorCode(e.Message), stage = "preview", details = PreviewOperation.ToolFailure("preview", "", e.Message).Details }); }
+            catch (IOException e) { return Results.Conflict(new { code = "VALIDATION_FAILED", stage = "preview", details = PreviewOperation.ToolFailure("preview", "", e.Message).Details }); }
+            finally { host.previewLock.Release(); }
+        });
+        app.MapGet("/v1/artifacts", (HttpContext context, string workspaceId, string snapshotId, string targetHash, string artifactId) =>
+        {
+            if (host.workspaceStore.Find(workspaceId) is not { } entry) return Results.NotFound();
+            try
+            {
+                if (PreviewOperation.TargetHash(entry) != targetHash) return Results.Conflict(new { code = "STALE_TARGET" });
+                return Results.File(host.previewStore.Read(workspaceId, snapshotId, targetHash, artifactId), "image/png");
+            }
+            catch (ArgumentException) { return Results.NotFound(); }
+            catch (IOException) { return Results.Conflict(new { code = "INVALID_ARTIFACT" }); }
         });
         await app.StartAsync();
         host.Address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
@@ -132,14 +219,22 @@ public sealed class PairingHost : IAsyncDisposable
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(descriptor, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return host;
     }
+    private IResult Publication(HttpContext context, string workspace, Func<IResult> action, SchemaVersion version)
+    {
+        if (version != new SchemaVersion(1, 0) || !workspaceStore.Contains(workspace)) return Results.BadRequest(new { code = "INVALID_PUBLICATION_REQUEST" });
+        try { lock (mutationLock) return action(); }
+        catch (ArgumentException) { return Results.BadRequest(new { code = "INVALID_PUBLICATION_REQUEST" }); }
+        catch (InvalidOperationException) { return Results.Conflict(new { code = "INCOMPLETE_PUBLICATION" }); }
+        catch (IOException) { return Results.Conflict(new { code = "PUBLICATION_CONFLICT" }); }
+        catch (JsonException) { return Results.BadRequest(new { code = "INVALID_PUBLICATION_REQUEST" }); }
+    }
     private string? Token(HttpContext context)
     {
         var authorization = context.Request.Headers.Authorization.ToString();
         return authorization.StartsWith("Bearer ", StringComparison.Ordinal) && authorization.Length == 71
             ? authorization.Substring(7) : null;
     }
-    private bool Authenticated(HttpContext context) => Token(context) is { } token && sessions.ContainsKey(token);
-    private bool LocalAuthorized(HttpContext context) => Token(context) is { } token &&
+    private bool LocalAuthorized(HttpContext context) => context.Request.Headers.Origin.Count == 0 && Token(context) is { } token &&
         CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(token), System.Text.Encoding.ASCII.GetBytes(cliToken));
     private IResult Mutate(Func<WorkspaceEntry> action)
     {
@@ -150,13 +245,18 @@ public sealed class PairingHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await app.DisposeAsync();
+        await runtimeOperation.DisposeAsync();
         File.Delete(Path.Combine(dataDirectory, "host.json"));
         ownershipLock.Dispose();
     }
+    private sealed record PreviewRequest(SchemaVersion schemaVersion, string workspaceId, string snapshotId, string targetHash);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record RuntimeRequest(SchemaVersion schemaVersion, string workspaceId, string snapshotId, string targetHash);
+    private sealed record BeginRequest(SchemaVersion schemaVersion, string workspaceId, JsonElement snapshot);
+    private sealed record BlobRequest(SchemaVersion schemaVersion, string workspaceId, string transferId, string hash, string bytes);
+    private sealed record FinalizeRequest(SchemaVersion schemaVersion, string workspaceId, string transferId);
     private sealed record LocalSample(string directory);
     private sealed record LocalRegistration(string directory, string project, string gumx);
-    private sealed record PairRequest(string challenge);
-    private sealed record SessionResponse(string token, SchemaVersion schemaVersion);
     private sealed record SchemaVersion(int major, int minor);
     private sealed record WorkspacesResponse(SchemaVersion schemaVersion, object[] workspaces);
     private sealed record LocalDescriptor(string address, string token);

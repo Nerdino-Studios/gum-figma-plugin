@@ -14,7 +14,7 @@ namespace GumBridge.Contracts.Tests;
 public sealed class WorkspaceTests
 {
     [Fact]
-    public async Task FreshSampleConflictAndAuthenticatedProjection()
+    public async Task FreshSampleConflictAndSafeProjection()
     {
         var root = Path.Combine(OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "gumbridge-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -27,16 +27,12 @@ public sealed class WorkspaceTests
             var destination = Path.Combine(root, "sample");
             var source = Path.Combine(AppContext.BaseDirectory, "SampleTemplate", "Content", "GumProject", "GumProject.gumx");
             var before = File.ReadAllBytes(source);
-            var challenge = host.IssueChallengeForLocalConsent();
-            var session = await (await client.PostAsJsonAsync("/v1/pair", new { challenge })).Content.ReadFromJsonAsync<JsonElement>();
-            var token = session.GetProperty("token").GetString()!;
-            using var denied = await client.GetAsync("/v1/workspaces");
-            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/v1/workspaces")).StatusCode);
             using (var pluginMutation = new HttpRequestMessage(HttpMethod.Post, "/v1/local/sample"))
             {
-                pluginMutation.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
+                pluginMutation.Headers.TryAddWithoutValidation("Origin", "null");
                 pluginMutation.Content = JsonContent.Create(new { directory = destination });
-                Assert.Equal(HttpStatusCode.Unauthorized, (await client.SendAsync(pluginMutation)).StatusCode);
+                Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(pluginMutation)).StatusCode);
                 Assert.False(Directory.Exists(destination));
             }
             var created = await WorkspaceCli.RunAsync(new[] { "sample", "init", "--directory", destination }, data);
@@ -54,7 +50,6 @@ public sealed class WorkspaceTests
             Assert.Equal("untouched", File.ReadAllText(Path.Combine(conflict, "keep.txt")));
             Assert.Empty(Directory.GetDirectories(root, ".gumbridge-stage-*"));
             using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/workspaces");
-            request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
             var response = await client.SendAsync(request);
             var body = await response.Content.ReadAsStringAsync();
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);

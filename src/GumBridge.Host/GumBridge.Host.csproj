@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="../../samples/GumBridge.Sample/**/*" Exclude="../../samples/GumBridge.Sample/**/bin/**;../../samples/GumBridge.Sample/**/obj/**;../../samples/GumBridge.Sample/**/FontCache/**" Link="SampleTemplate/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../samples/GumBridge.Runtime/**/*" Exclude="../../samples/GumBridge.Runtime/**/bin/**;../../samples/GumBridge.Runtime/**/obj/**" Link="RuntimeTemplate/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../GumBridge.Application/GumBridge.Application.csproj" />
     <ProjectReference Include="../GumBridge.Infrastructure/GumBridge.Infrastructure.csproj" />
   </ItemGroup>

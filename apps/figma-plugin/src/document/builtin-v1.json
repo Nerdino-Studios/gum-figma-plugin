@@ -1,0 +1,14 @@
+{
+  "schemaVersion": { "major": 1, "minor": 0 },
+  "catalogId": "gumbridge.builtin",
+  "revision": "1.0",
+  "source": "GAM-213 minimal native frame/text/image serializer; interactive adapters not yet implemented",
+  "controls": [
+    { "id": "native.frame", "label": "Frame / screen", "available": true, "modes": ["generate"], "properties": ["bounds", "layoutMode", "clipsContent"], "states": [], "slots": [] },
+    { "id": "native.text", "label": "Native text", "available": true, "modes": ["generate"], "properties": ["characters", "fontFamily", "fontStyle", "fontSize"], "states": [], "slots": [] },
+    { "id": "native.image", "label": "Native image", "available": true, "modes": ["generate"], "properties": ["imageHash", "scaleMode"], "states": [], "slots": [] },
+    { "id": "forms.button", "label": "Button (adapter pending)", "available": false, "modes": [], "properties": [], "states": [], "slots": [] },
+    { "id": "forms.textbox", "label": "TextBox (adapter pending)", "available": false, "modes": [], "properties": [], "states": [], "slots": [] },
+    { "id": "forms.scrollviewer", "label": "ScrollViewer (adapter pending)", "available": false, "modes": [], "properties": [], "states": [], "slots": [] }
+  ]
+}
